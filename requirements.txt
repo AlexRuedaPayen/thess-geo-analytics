@@ -1,0 +1,35 @@
+# --- Core Python utils ----
+
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# --- Data handling ---
+
+numpy>=1.24
+pandas>=2.0
+pyarrow>=14.0.1
+
+# --- Geospatial vector ---
+
+geopandas>=0.14
+shapely>=2.0
+pyproj>=3.6
+
+# --- STAC / EO catalog ---
+
+pystac-client>=0.7.6
+pystac>=1.10.0
+
+# --- Raster/grid stack ---
+
+rasterio>=1.3.10
+xarray>=2024.1.0
+rioxarray>=0.15.9
+
+# --- Visualization ---
+
+matplotlib>=3.8
+
+# --- Miscallaneous ---
+
+tqdm>=4.66
