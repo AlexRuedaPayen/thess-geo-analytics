@@ -13,7 +13,7 @@ python -m venv .venv
 #### 2. Add the virtual environement to .gitignore
 
 ```
-.venv/
+/.venv/
 ```
 
 #### 3. Install dependencies
