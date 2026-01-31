@@ -1,2 +1,34 @@
-/.venv/
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build artifacts
+*.egg-info/
+*.eggs/
+build/
+dist/
+*.spec
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Auto-generated project outputs
+outputs/
+aoi/*.geojson
+
+# Raw data (large or external datasets)
+data_raw/
+
+# Environment variables / secrets
 .env
