@@ -36,7 +36,10 @@ class NutsExtractor:
     def filter_by_code(self, nuts_code: str) -> gpd.GeoDataFrame:
         return self.filter_by(key="NUTS_ID",  val=nuts_code)
 
-    def filter_by_name(self, region_name: str) -> gpd.GeoDataFrame:
+    def filter_by_name(self, region_name: str) -> str:
+        def preporcessing():
+            ### DO NOT FORGET TO DO SOME PREPROCESSING
+            pass
         return self.filter_by(key="NAME_LATN",  val=region_name).NUTS_ID.iloc[0]
 
     def export(self, gdf: gpd.GeoDataFrame, destination: Path) -> Path:
