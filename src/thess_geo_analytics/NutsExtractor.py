@@ -37,10 +37,14 @@ class NutsExtractor:
         return self.filter_by(key="NUTS_ID",  val=nuts_code)
 
     def filter_by_name(self, region_name: str) -> str:
-        def preporcessing():
-            ### DO NOT FORGET TO DO SOME PREPROCESSING
-            pass
-        return self.filter_by(key="NAME_LATN",  val=region_name).NUTS_ID.iloc[0]
+        if self.gdf is None:
+            raise RuntimeError("Call .load() before filtering.")
+
+        s = self.gdf["NAME_LATN"].astype(str).str.lower()
+        hits = self.gdf[s == region_name.lower()]
+        if hits.empty:
+            raise ValueError(f"Region name '{region_name}' not found in dataset.")
+        return hits["NUTS_ID"].iloc[0]
 
     def export(self, gdf: gpd.GeoDataFrame, destination: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
