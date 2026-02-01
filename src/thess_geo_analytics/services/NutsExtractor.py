@@ -2,7 +2,6 @@ import geopandas as gpd
 from pathlib import Path
 
 class NutsExtractor:
-    """Extract NUTS regions (Eurostat GISCO) and export subsets as GeoJSON."""
 
     def __init__(self, source: Path):
         if not source.exists():
