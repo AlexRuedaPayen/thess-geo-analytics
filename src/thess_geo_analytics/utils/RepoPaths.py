@@ -2,7 +2,7 @@ from pathlib import Path
 import os
 
 class RepoPaths:
-    ROOT = Path(__file__).resolve().parents[2]
+    ROOT = Path(__file__).resolve().parents[3]
 
     DATA_LAKE = Path(os.environ.get("DATA_LAKE", str(ROOT)))
     DATA_RAW = DATA_LAKE / "data_raw"
