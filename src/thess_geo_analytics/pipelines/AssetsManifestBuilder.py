@@ -16,7 +16,7 @@ class AssetsManifestBuilder:
         month: str,  # "YYYY-MM"
         max_scenes: int = 10,
         collection: str = "sentinel-2-l2a",
-        cache_root: Path = Path("DATA_LAKE/cache/s2"),
+        cache_root: Path = RepoPaths.CACHE_S2,
         download_n: int = 3,   # for acceptance test
         validate_rasterio: bool = True,
     ) -> None:
