@@ -32,3 +32,9 @@ data_raw/
 
 # Environment variables / secrets
 .env
+
+#DATA_LAKE
+DATA_LAKE/
+
+#old classes
+old/

@@ -4,10 +4,10 @@ import sys
 from dotenv import load_dotenv
 
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
-from thess_geo_analytics.pipelines.NdviMonthlyCompositePipeline import NdviMonthlyCompositePipeline, NdviMonthlyParams
+from old.NdviMonthlyCompositePipeline import NdviMonthlyCompositePipeline, NdviMonthlyParams
 
 class BuildNdviMonthlyComposite:
-    def init(self) -> None:
+    def __init__(self) -> None:
         pass
 
     def run(self) -> None:
