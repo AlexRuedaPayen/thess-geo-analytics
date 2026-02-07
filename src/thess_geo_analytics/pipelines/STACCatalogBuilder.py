@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import date, timedelta
 from pathlib import Path
 
-from thess_geo_analytics.RepoPaths import RepoPaths
-from thess_geo_analytics.CdseSceneCatalogService import CdseSceneCatalogService
-from thess_geo_analytics.StacQueryParams import StacQueryParams
+from thess_geo_analytics.utils.RepoPaths import RepoPaths
+from thess_geo_analytics.services.CdseSceneCatalogService import CdseSceneCatalogService
+from thess_geo_analytics.parameters.StacQueryParams import StacQueryParams
 
 
 class STACCatalogBuilder:

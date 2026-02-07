@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from pystac_client import Client
 
-from thess_geo_analytics.StacQueryParams import StacQueryParams
+from thess_geo_analytics.parameters.StacQueryParams import StacQueryParams
 
 
 class CdseSceneCatalogService:

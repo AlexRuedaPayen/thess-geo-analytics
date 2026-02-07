@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.thess_geo_analytics.pipelines.AssetsManifestBuilder import AssetsManifestBuilder
+from thess_geo_analytics.pipelines.AssetsManifestBuilder import AssetsManifestBuilder
 
 
 class BuildAssetsManifest:

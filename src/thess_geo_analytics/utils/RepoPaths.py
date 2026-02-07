@@ -5,8 +5,9 @@ class RepoPaths:
     ROOT = Path(__file__).resolve().parents[3]
 
     # Base DATA_LAKE, raw data
-    DATA_LAKE = Path(os.environ.get("DATA_LAKE", str(ROOT)))
+    DATA_LAKE = Path(os.environ.get("DATA_LAKE", str(ROOT / "DATA_LAKE")))
     DATA_RAW = DATA_LAKE / "data_raw"
+    CACHE_S2 = DATA_LAKE / "cache" / "s2"
 
     # Geospatial AOI folder
     AOI = ROOT / "aoi"

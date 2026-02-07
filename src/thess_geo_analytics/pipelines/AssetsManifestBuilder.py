@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 import pandas as pd
 
-from src.thess_geo_analytics.utils.RepoPaths import RepoPaths
-from src.thess_geo_analytics.services.CdseStacItemService import CdseStacItemService
-from src.thess_geo_analytics.services.StacAssetResolver import StacAssetResolver
-from src.thess_geo_analytics.services.CdseTokenService import CdseTokenService
-from src.thess_geo_analytics.services.CdseAssetDownloader import CdseAssetDownloader
+from thess_geo_analytics.utils.RepoPaths import RepoPaths
+from thess_geo_analytics.services.CdseStacItemService import CdseStacItemService
+from thess_geo_analytics.services.StacAssetResolver import StacAssetResolver
+from thess_geo_analytics.services.CdseTokenService import CdseTokenService
+from thess_geo_analytics.services.CdseAssetDownloader import CdseAssetDownloader
 
 
 class AssetsManifestBuilder:
@@ -16,7 +16,7 @@ class AssetsManifestBuilder:
         month: str,  # "YYYY-MM"
         max_scenes: int = 10,
         collection: str = "sentinel-2-l2a",
-        cache_root: Path = Path("DATA_LAKE/cache/s2"),
+        cache_root: Path = RepoPaths.CACHE_S2,
         download_n: int = 3,   # for acceptance test
         validate_rasterio: bool = True,
     ) -> None:
