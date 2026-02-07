@@ -4,13 +4,22 @@ import os
 class RepoPaths:
     ROOT = Path(__file__).resolve().parents[3]
 
+    # Base DATA_LAKE, raw data
     DATA_LAKE = Path(os.environ.get("DATA_LAKE", str(ROOT)))
     DATA_RAW = DATA_LAKE / "data_raw"
 
+    # Geospatial AOI folder
     AOI = ROOT / "aoi"
-    TABLES = ROOT / "outputs" / "tables"
-    FIGURES = ROOT / "outputs" / "figures"
 
+    # OUTPUTS root
+    OUTPUTS = ROOT / "outputs"
+
+    # Subfolders
+    TABLES = OUTPUTS / "tables"
+    FIGURES = OUTPUTS / "figures"
+    TMP = OUTPUTS / "tmp"
+
+    # --- Accessor methods ---
     @staticmethod
     def raw(filename: str) -> Path:
         return RepoPaths.DATA_RAW / filename
@@ -27,6 +36,13 @@ class RepoPaths:
     def figure(filename: str) -> Path:
         return RepoPaths.FIGURES / filename
 
-if __name__ == '__main__':
-    print(RepoPaths.raw("NUTS_BN_01M_2024_4326.geojson"))
-    print(RepoPaths.aoi("el522_thessaloniki.geojson"))
+    @staticmethod
+    def tmp(filename: str) -> Path:
+        return RepoPaths.TMP / filename
+
+
+if __name__ == "__main__":
+    print("ROOT:", RepoPaths.ROOT)
+    print("TMP:", RepoPaths.TMP)
+    print("TABLES:", RepoPaths.TABLES)
+    print("FIGURES:", RepoPaths.FIGURES)
