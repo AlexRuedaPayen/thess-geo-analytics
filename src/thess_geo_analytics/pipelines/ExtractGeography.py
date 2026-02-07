@@ -4,8 +4,8 @@ from pathlib import Path
 
 import geopandas as gpd
 
-from thess_geo_analytics.RepoPaths import RepoPaths
-from thess_geo_analytics.NutsExtractor import NutsExtractor
+from src.thess_geo_analytics.utils.RepoPaths import RepoPaths
+from src.thess_geo_analytics.services.NutsExtractor import NutsExtractor
 
 
 def slugify(text: str) -> str:
@@ -52,7 +52,7 @@ class ExtractGeography:
 
 def main() -> None:
     if len(sys.argv) < 2:
-        raise SystemExit("Usage: python -m thess_geo_analytics.extract_geography <RegionName>")
+        raise SystemExit("Usage: python -m thess_geo_analytics.pipelines.extract_geography <RegionName>")
 
     region = sys.argv[1]
     ExtractGeography(region).run()
