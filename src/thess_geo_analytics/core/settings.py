@@ -4,77 +4,96 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-from thess_geo_analytics.core.constants import NDVI_NODATA
+from thess_geo_analytics.core.constants import (
+    NDVI_NODATA,
+    DEFAULT_NUTS_FILENAME,
+)
 
-# Load .env if available
+# Load .env if available (keep only here)
 load_dotenv()
 
 # ---------------------------------------------------------------------
-# DATA LAYER & CACHE CONFIG
+# Helpers
 # ---------------------------------------------------------------------
 
-# The base of your repo (used as fallback)
+def _as_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+# ---------------------------------------------------------------------
+# Repo + data roots
+# ---------------------------------------------------------------------
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# DATA_LAKE_DIR:
-# Priority:
-#   1) Environment variable DATA_LAKE
-#   2) "DATA_LAKE" folder in repo root
-DATA_LAKE_DIR = Path(os.environ.get("DATA_LAKE", REPO_ROOT / "DATA_LAKE"))
+# DATA_LAKE base (env override)
+DATA_LAKE_DIR = Path(os.environ.get("DATA_LAKE", str(REPO_ROOT / "DATA_LAKE")))
 
-# Cache folders inside DATA_LAKE
+# Standardized subfolders inside the data lake
+DATA_RAW_DIR = DATA_LAKE_DIR / "data_raw"
 CACHE_DIR = DATA_LAKE_DIR / "cache"
 CACHE_S2_DIR = CACHE_DIR / "s2"
 
 # ---------------------------------------------------------------------
-# COLLECTIONS
+# GISCO / NUTS data (auto-download)
+# ---------------------------------------------------------------------
+
+NUTS_LOCAL_PATH = DATA_RAW_DIR / DEFAULT_NUTS_FILENAME
+
+AUTO_DOWNLOAD_GISCO = _as_bool(os.environ.get("AUTO_DOWNLOAD_GISCO"), default=True)
+
+# ---------------------------------------------------------------------
+# Collections
 # ---------------------------------------------------------------------
 
 DEFAULT_COLLECTION = os.environ.get("DEFAULT_COLLECTION", "sentinel-2-l2a")
 
 # ---------------------------------------------------------------------
-# NDVI / RASTER CONFIG
+# Raster defaults
 # ---------------------------------------------------------------------
 
-GLOBAL_NODATA = float(os.environ.get("NDVI_NODATA", NDVI_NODATA))
-DEFAULT_RESAMPLING = os.environ.get("DEFAULT_RESAMPLING", "nearest")  
+GLOBAL_NODATA = float(os.environ.get("NDVI_NODATA", str(NDVI_NODATA)))
+DEFAULT_RESAMPLING = os.environ.get("DEFAULT_RESAMPLING", "nearest")
 
 # ---------------------------------------------------------------------
-# LOGGING & VERBOSITY
+# Logging / verbosity
 # ---------------------------------------------------------------------
 
-VERBOSE = os.environ.get("VERBOSE", "0") in {"1", "true", "TRUE", "yes"}
+VERBOSE = _as_bool(os.environ.get("VERBOSE"), default=False)
 
 # ---------------------------------------------------------------------
-# CDSE AUTH
+# CDSE Auth
 # ---------------------------------------------------------------------
 
-CDSE_USERNAME = os.environ.get("CDSE_USERNAME", None)
-CDSE_PASSWORD = os.environ.get("CDSE_PASSWORD", None)
-CDSE_TOTP = os.environ.get("CDSE_TOTP", None)
+CDSE_USERNAME = os.environ.get("CDSE_USERNAME")
+CDSE_PASSWORD = os.environ.get("CDSE_PASSWORD")
+CDSE_TOTP = os.environ.get("CDSE_TOTP")
 
 # ---------------------------------------------------------------------
 # Notebook behavior
 # ---------------------------------------------------------------------
 
-# Make notebooks reproducible without weird path issues
-NOTEBOOK_MODE = os.environ.get("NOTEBOOK_MODE", "0") in {"1", "true", "yes"}
+NOTEBOOK_MODE = _as_bool(os.environ.get("NOTEBOOK_MODE"), default=False)
 
 # ---------------------------------------------------------------------
-# Utility
+# Debug
 # ---------------------------------------------------------------------
 
-def debug():
-    """Print current settings for debugging."""
+def debug() -> None:
     print("=== SETTINGS ===")
-    print("REPO_ROOT:       ", REPO_ROOT)
-    print("DATA_LAKE_DIR:   ", DATA_LAKE_DIR)
-    print("CACHE_S2_DIR:    ", CACHE_S2_DIR)
-    print("DEFAULT_COLLECTION:", DEFAULT_COLLECTION)
-    print("GLOBAL_NODATA:   ", GLOBAL_NODATA)
-    print("VERBOSE:         ", VERBOSE)
+    print("REPO_ROOT:           ", REPO_ROOT)
+    print("DATA_LAKE_DIR:       ", DATA_LAKE_DIR)
+    print("DATA_RAW_DIR:        ", DATA_RAW_DIR)
+    print("CACHE_S2_DIR:        ", CACHE_S2_DIR)
+    print("NUTS_LOCAL_PATH:     ", NUTS_LOCAL_PATH)
+    print("AUTO_DOWNLOAD_GISCO: ", AUTO_DOWNLOAD_GISCO)
+    print("DEFAULT_COLLECTION:  ", DEFAULT_COLLECTION)
+    print("GLOBAL_NODATA:       ", GLOBAL_NODATA)
+    print("DEFAULT_RESAMPLING:  ", DEFAULT_RESAMPLING)
+    print("VERBOSE:             ", VERBOSE)
+    print("NOTEBOOK_MODE:       ", NOTEBOOK_MODE)
     print("=================")
 
-
-if __name__=='__main__':
+if __name__ == "__main__":
     debug()

@@ -4,6 +4,18 @@ from __future__ import annotations
 # Copernicus Data Space Ecosystem (CDSE)
 # ---------------------------------------------------------------------
 
+# Nuts Extraction download URL & Download file name
+
+GISCO_NUTS_URL = (
+    "https://gisco-services.ec.europa.eu/distribution/v2/NUTS/GeoJSON/"
+    "NUTS_RG_01M_2024_4326.geojson"
+)
+
+DEFAULT_NUTS_FILENAME = "NUTS_RG_01M_2024_4326.geojson"
+
+HTTP_TIMEOUT = 120
+
+
 # Identity / OAuth token endpoint
 CDSE_TOKEN_URL = (
     "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
