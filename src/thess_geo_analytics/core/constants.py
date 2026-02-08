@@ -21,8 +21,15 @@ CDSE_TOKEN_URL = (
     "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
 )
 
+# ---------------------------------------------------------------------
 # STAC Catalog base
+# ---------------------------------------------------------------------
+
+# Old CDSE STAC base (used sometimes, but not for pystac_client)
 CDSE_STAC_BASE_URL = "https://stac.dataspace.copernicus.eu/v1"
+
+# Recommended URL for STAC Catalogue queries (pystac_client)
+CDSE_CATALOG_STAC_URL = "https://catalogue.dataspace.copernicus.eu/stac"
 
 # Optional: Process API base (if you later use the /process endpoint)
 CDSE_PROCESS_BASE_URL = "https://sh.dataspace.copernicus.eu/api/v1/process"
