@@ -1,37 +1,49 @@
-from dotenv import load_dotenv
-from pathlib import Path
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[3] / ".env")
-import os
-import requests
+from __future__ import annotations
 
+from typing import Optional
 
-TOKEN_URL = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
+from thess_geo_analytics.core.constants import CDSE_TOKEN_URL
+from thess_geo_analytics.core.HttpClient import HttpClient, HttpConfig
+from thess_geo_analytics.core.settings import CDSE_USERNAME, CDSE_PASSWORD, CDSE_TOTP
+
 
 class CdseTokenService:
-    def __init__(self) -> None:
-        self._token: str | None = None
+    def __init__(self, http: HttpClient | None = None) -> None:
+        self._token: Optional[str] = None
+        self.http = http or HttpClient(HttpConfig())
 
     def get_token(self) -> str:
         if self._token:
             return self._token
 
-        username = os.getenv("CDSE_USERNAME")
-        password = os.getenv("CDSE_PASSWORD")
-        totp = os.getenv("CDSE_TOTP")
-
-        if not username or not password:
+        if not CDSE_USERNAME or not CDSE_PASSWORD:
             raise EnvironmentError("Missing CDSE_USERNAME / CDSE_PASSWORD in environment (.env).")
 
         data = {
             "client_id": "cdse-public",
             "grant_type": "password",
-            "username": username,
-            "password": password,
+            "username": CDSE_USERNAME,
+            "password": CDSE_PASSWORD,
         }
-        if totp:
-            data["totp"] = totp
+        if CDSE_TOTP:
+            data["totp"] = CDSE_TOTP
 
-        r = requests.post(TOKEN_URL, data=data, timeout=60)
-        r.raise_for_status()
-        self._token = r.json()["access_token"]
+        r = self.http.post(CDSE_TOKEN_URL, data=data)
+        token = r.json().get("access_token")
+        if not token:
+            raise RuntimeError("Token response missing access_token")
+        self._token = token
         return self._token
+
+    @staticmethod
+    def smoke_test() -> None:
+        print("=== CdseTokenService Smoke Test ===")
+        svc = CdseTokenService()
+        tok = svc.get_token()
+        print("[OK] Token retrieved.")
+        print("Token prefix:", tok[:20], "...")
+        print("✓ Smoke test OK")
+
+
+if __name__ == "__main__":
+    CdseTokenService.smoke_test()
