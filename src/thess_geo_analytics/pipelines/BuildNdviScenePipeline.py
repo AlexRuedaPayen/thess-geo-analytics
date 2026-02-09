@@ -7,6 +7,8 @@ import pandas as pd
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
 from thess_geo_analytics.geo.CloudMasker import CloudMasker
 from thess_geo_analytics.geo.NdviProcessor import NdviProcessor
+from thess_geo_analytics.geo.RasterWriter import RasterWriter
+
 
 
 @dataclass(frozen=True)
@@ -19,6 +21,8 @@ class BuildNdviScenePipeline:
     def __init__(self) -> None:
         self.masker = CloudMasker()
         self.ndvi = NdviProcessor()
+        self.writer = RasterWriter()
+
 
     def run(self, params: BuildNdviSceneParams) -> tuple[Path, Path]:
         manifest_path = RepoPaths.table(f"assets_manifest_{params.month}.csv")
@@ -53,8 +57,10 @@ class BuildNdviScenePipeline:
         out_tif = RepoPaths.tmp(f"ndvi_scene_{params.scene_id}.tif")
         out_png = RepoPaths.figure(f"ndvi_scene_{params.scene_id}_preview.png")
 
-        self.ndvi.write_geotiff(out_tif, ndvi_masked, out_profile)
-        self.ndvi.write_preview_png(out_png, ndvi_masked)
+        arr_out = self.ndvi.to_nodata(ndvi_masked)
+        self.writer.write_geotiff(out_tif, arr_out, out_profile)
+        self.writer.write_preview_png(out_png, ndvi_masked)
+
 
         return out_tif, out_png
 
