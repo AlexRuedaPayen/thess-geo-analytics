@@ -12,7 +12,7 @@ from shapely.geometry import shape
 from thess_geo_analytics.builders.SceneCatalogBuilder import SceneCatalogBuilder
 from thess_geo_analytics.core.params import StacQueryParams
 from thess_geo_analytics.core.settings import DEFAULT_COLLECTION
-from thess_geo_analytics.geo.tile_selection import TileSelector
+from thess_geo_analytics.geo.TileSelector import TileSelector
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
 
