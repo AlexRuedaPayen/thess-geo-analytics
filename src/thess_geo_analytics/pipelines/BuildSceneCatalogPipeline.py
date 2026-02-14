@@ -1,10 +1,8 @@
-# thess_geo_analytics/pipelines/BuildSceneCatalogPipeline.py
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 from shapely.geometry import shape
@@ -23,7 +21,6 @@ class BuildSceneCatalogParams:
     max_items: int = 300
     collection: str = DEFAULT_COLLECTION
 
-    # --- Tile selection (post-processing) ---
     use_tile_selector: bool = True
     full_cover_threshold: float = 0.999
     allow_pair: bool = True
@@ -52,38 +49,52 @@ class BuildSceneCatalogPipeline:
             params=stac_params,
         )
 
-        if not items:
-            RepoPaths.TABLES.mkdir(parents=True, exist_ok=True)
-            out_csv = RepoPaths.table("scenes_catalog.csv")
-            pd.DataFrame(
-                columns=["id", "datetime", "cloud_cover", "platform", "constellation", "collection"]
-            ).to_csv(out_csv, index=False)
-            print(f"[OK] STAC catalog exported => {out_csv}")
-            print("[OK] Scenes found: 0")
-            return out_csv
+        RepoPaths.TABLES.mkdir(parents=True, exist_ok=True)
 
-        # 2) Optional post-processing: least-cloudy coverage-per-date selection
-        selected_items = items
+        raw_csv = RepoPaths.table("scenes_catalog.csv")
+        selected_csv = RepoPaths.table("scenes_selected.csv")
+
+        if not items:
+            empty = pd.DataFrame(
+                columns=["id", "datetime", "cloud_cover", "platform", "constellation", "collection"]
+            )
+            empty.to_csv(raw_csv, index=False)
+            if params.use_tile_selector:
+                empty.to_csv(selected_csv, index=False)
+
+            print(f"[OK] STAC catalog exported => {raw_csv}")
+            print("[OK] Scenes found: 0")
+            if params.use_tile_selector:
+                print(f"[OK] Selected scenes exported => {selected_csv}")
+            return selected_csv if params.use_tile_selector else raw_csv
+
+        # 2) Always write RAW catalog first
+        raw_df = self.builder.service.items_to_dataframe(items, collection=params.collection)
+        raw_df.to_csv(raw_csv, index=False)
+        print(f"[OK] STAC catalog exported => {raw_csv}")
+        print(f"[OK] Raw scenes found: {len(raw_df)}")
+
+        # 3) Optional selection -> write scenes_selected.csv
         if params.use_tile_selector:
             aoi_shp = shape(aoi_geom_geojson)
             selector = TileSelector(
                 full_cover_threshold=params.full_cover_threshold,
                 allow_pair=params.allow_pair,
             )
+
             by_date = selector.select_best_items_per_date(items, aoi_shp)
-            # flatten date->items into a list
             selected_items = [it for d in sorted(by_date) for it in by_date[d]]
 
-        # 3) Convert to DataFrame + write
-        df = self.builder.service.items_to_dataframe(selected_items, collection=params.collection)
+            selected_df = self.builder.service.items_to_dataframe(
+                selected_items, collection=params.collection
+            )
+            selected_df.to_csv(selected_csv, index=False)
 
-        RepoPaths.TABLES.mkdir(parents=True, exist_ok=True)
-        out_csv = RepoPaths.table("scenes_catalog.csv")
-        df.to_csv(out_csv, index=False)
+            print(f"[OK] Selected scenes exported => {selected_csv}")
+            print(f"[OK] Selected scenes: {len(selected_df)}")
+            print(f"[OK] Dates kept: {selected_df['datetime'].dt.date.nunique() if not selected_df.empty else 0}")
 
-        print(f"[OK] STAC catalog exported => {out_csv}")
-        print(f"[OK] Scenes found: {len(df)}")
-        if params.use_tile_selector:
-            print(f"[OK] Dates kept: {df['datetime'].dt.date.nunique() if not df.empty else 0}")
+            return selected_csv
 
-        return out_csv
+        # 4) If selector disabled, the ingestable file is the raw catalog
+        return raw_csv

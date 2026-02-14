@@ -1,4 +1,3 @@
-# geo/tile_selection.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -25,28 +24,48 @@ class CoverageInfo:
     cloud: float
     frac: float              # fraction of AOI covered by this item's footprint
     covered_geom: Any        # AOI ∩ footprint (in an area CRS if pyproj available)
+    acq_dt: datetime         # acquisition datetime (UTC, real timestamp)
     acq_date: date           # acquisition date (UTC)
+
+
+@dataclass(frozen=True)
+class SelectedScene:
+    """
+    Output for one anchor date (fictional grid date).
+    - anchor_date: the interpolated / regular-grid date you want in your time series
+    - acq_dt: the real acquisition timestamp of the chosen scene group
+    - items: 1..k tiles (usually 1 or 2) used to cover the AOI
+    - cloud_score: the selection score used across timestamps (see rule below)
+    - coverage_frac: AOI coverage fraction achieved by the chosen union
+    """
+    anchor_date: date
+    acq_dt: datetime
+    items: List[ItemLike]
+    cloud_score: float
+    coverage_frac: float
 
 
 class TileSelector:
     """
-    Select least-cloudy items that cover the AOI.
+    Build a *regular* time series over a period T by selecting the best *real* scene around
+    each anchor date.
 
-    Selection options:
-      1) Per-date: pick best combo for each acquisition date.
-      2) Sliding window: pick best combo within a centered window around anchor dates.
+    RULE (your spec):
+      1) Split period T into n equal intervals; define anchor dates d_i as the midpoint of each interval.
+      2) For each anchor date d:
+           - consider items acquired within a centered window [d - half_window, d + half_window]
+           - group candidate items by their real acquisition timestamp (acq_dt)
+           - for each timestamp group, find the best union of tiles that covers the AOI
+             (single tile, then pairs, then optionally triples... up to max_union_tiles)
+           - score that best union by cloud_score = max(cloud of tiles in union)
+           - pick the timestamp group with the minimum cloud_score
+             (tie-break: higher coverage, then closer to anchor, then fewer tiles)
+      3) Output one SelectedScene per anchor date (fictional anchor, real acquisition timestamp kept).
 
-    Coverage rules:
-      - Prefer a single item that fully covers AOI (>= full_cover_threshold).
-      - If not available, optionally consider pairs; prefer full-cover pairs.
-      - Fallback to best-coverage single.
-
-    Cloud scoring for pairs:
-      Uses an AOI-weighted score that avoids double-counting overlap:
-        score = (cloud_a * area(a_only) + cloud_b * area(b_only) + min(cloud_a, cloud_b) * area(overlap)) / aoi_area
-
-      Note: cloud is scene-level metadata, not per-pixel; using min() on overlap is a pragmatic
-      approximation consistent with mosaicking "take the better tile where both exist".
+    Notes:
+      - cloud is scene-level metadata, not per-pixel. Using max() for unions is conservative and matches
+        your "take the worst tile in the mosaic" rule.
+      - For Thessaloniki AOI, unions should typically be 1 tile (sometimes 2).
     """
 
     # ------------------------------------------------------------------
@@ -56,98 +75,122 @@ class TileSelector:
         self,
         *,
         full_cover_threshold: float = 0.999,
-        allow_pair: bool = True,
+        allow_union: bool = True,
+        max_union_tiles: int = 2,
         min_intersection_frac: float = 1e-6,
         cloud_keys: Sequence[str] = ("cloud_cover", "eo:cloud_cover"),
         datetime_key: str = "datetime",
     ):
         self.full_cover_threshold = float(full_cover_threshold)
-        self.allow_pair = bool(allow_pair)
+        self.allow_union = bool(allow_union)
+        self.max_union_tiles = int(max_union_tiles)
         self.min_intersection_frac = float(min_intersection_frac)
         self.cloud_keys = tuple(cloud_keys)
         self.datetime_key = datetime_key
 
+        if self.max_union_tiles < 1:
+            raise ValueError("max_union_tiles must be >= 1")
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def select_best_items_per_date(
-        self,
-        items: Sequence[ItemLike],
-        aoi_geom_4326,
-    ) -> Dict[date, List[ItemLike]]:
-        """
-        Returns {acq_date: [item] or [item1, item2]}.
-        """
-        by_date = self._group_by_date(items)
-        selected: Dict[date, List[ItemLike]] = {}
-
-        for d, day_items in by_date.items():
-            infos, _, _, aoi_area_value = self._coverage_infos(day_items, aoi_geom_4326)
-            if not infos:
-                continue
-
-            chosen_infos = self._select_best_combo(infos, aoi_area_value)
-            selected[d] = [ci.item for ci in chosen_infos]
-
-        return selected
-
-    def select_best_items_sliding_window(
+    def select_regular_time_series(
         self,
         items: Sequence[ItemLike],
         aoi_geom_4326,
         *,
+        period_start: date,
+        period_end: date,
+        n_anchors: int,
         window_days: int = 15,
-        step_days: int = 5,
-    ) -> Dict[date, List[ItemLike]]:
+    ) -> List[SelectedScene]:
         """
-        Sliding window selection.
+        Build the regular-grid catalog:
+          - anchors = midpoints of n_anchors equal subdivisions between [period_start, period_end]
+          - for each anchor, pick best scene in ±window_days//2 around anchor.
 
-        Anchors every `step_days` between min_date..max_date.
-        For each anchor date A, considers items with acquisition dates in:
-            [A - floor(window_days/2), A + floor(window_days/2)]
-
-        Returns {anchor_date: [item] or [item1, item2]}.
+        Returns a list of SelectedScene (len <= n_anchors if some anchors have no candidates).
         """
         if not items:
-            return {}
+            return []
 
-        # Work from unique acquisition dates present in the items
-        dates = sorted({self._get_datetime(it).date() for it in items})
-        if not dates:
-            return {}
+        if n_anchors <= 0:
+            raise ValueError("n_anchors must be > 0")
+        if period_end < period_start:
+            raise ValueError("period_end must be >= period_start")
+        if window_days <= 0:
+            raise ValueError("window_days must be > 0")
 
-        min_d, max_d = dates[0], dates[-1]
+        anchors = self._make_midpoint_anchors(period_start, period_end, n_anchors)
         half = window_days // 2
 
-        anchors: List[date] = []
-        cur = min_d
-        while cur <= max_d:
-            anchors.append(cur)
-            cur = cur + timedelta(days=step_days)
-
-        selected: Dict[date, List[ItemLike]] = {}
-
-        # Precompute coverage infos once for all items (more efficient + consistent)
+        # Precompute AOI coverage infos (in an area CRS if possible)
         infos_all, _, _, aoi_area_value = self._coverage_infos(items, aoi_geom_4326)
         if not infos_all or aoi_area_value <= 0:
-            return {}
+            return []
+
+        # Group by real acquisition timestamp once
+        by_dt: Dict[datetime, List[CoverageInfo]] = {}
+        for ci in infos_all:
+            by_dt.setdefault(ci.acq_dt, []).append(ci)
+
+        out: List[SelectedScene] = []
 
         for anchor in anchors:
             lo = anchor - timedelta(days=half)
             hi = anchor + timedelta(days=half)
 
-            window_infos = [ci for ci in infos_all if lo <= ci.acq_date <= hi]
-            if not window_infos:
+            # candidate timestamps within window
+            candidate_dts = [dt for dt in by_dt.keys() if lo <= dt.date() <= hi]
+            if not candidate_dts:
                 continue
 
-            chosen_infos = self._select_best_combo(
-                window_infos,
-                aoi_area_value,
-                anchor_date=anchor,
+            best = self._choose_best_timestamp(
+                candidate_dts=candidate_dts,
+                by_dt=by_dt,
+                aoi_area_value=aoi_area_value,
+                anchor=anchor,
             )
-            selected[anchor] = [ci.item for ci in chosen_infos]
+            if best is None:
+                continue
 
-        return selected
+            cov_frac, cloud_score, chosen_dt, chosen_infos = best
+            out.append(
+                SelectedScene(
+                    anchor_date=anchor,
+                    acq_dt=chosen_dt,
+                    items=[ci.item for ci in chosen_infos],
+                    cloud_score=cloud_score,
+                    coverage_frac=cov_frac,
+                )
+            )
+
+        return out
+
+    # ------------------------------------------------------------------
+    # Internals: anchors
+    # ------------------------------------------------------------------
+    def _make_midpoint_anchors(self, start: date, end: date, n: int) -> List[date]:
+        """
+        Split [start, end] into n equal intervals (in days, inclusive endpoints),
+        and return the midpoint date of each interval.
+        """
+        total_days = (end - start).days
+        if total_days == 0:
+            return [start] * n
+
+        # interval length in floating days
+        step = total_days / n
+        anchors: List[date] = []
+
+        for i in range(n):
+            # interval i spans [start + i*step, start + (i+1)*step]
+            mid = (i + 0.5) * step
+            anchors.append(start + timedelta(days=int(round(mid))))
+
+        # ensure anchors are within bounds
+        anchors = [min(max(a, start), end) for a in anchors]
+        return anchors
 
     # ------------------------------------------------------------------
     # Internals: item access
@@ -181,13 +224,6 @@ class TileSelector:
                 except Exception:
                     pass
         return float("inf")
-
-    def _group_by_date(self, items: Sequence[ItemLike]) -> Dict[date, List[ItemLike]]:
-        grouped: Dict[date, List[ItemLike]] = {}
-        for it in items:
-            d = self._get_datetime(it).date()
-            grouped.setdefault(d, []).append(it)
-        return grouped
 
     # ------------------------------------------------------------------
     # Internals: projection + coverage
@@ -223,6 +259,7 @@ class TileSelector:
         infos: List[CoverageInfo] = []
         for it in items:
             footprint_4326 = shape(self._get_geometry(it))
+            acq_dt = self._get_datetime(it)
 
             if proj is not None:
                 footprint_area = shp_transform(proj, footprint_4326)
@@ -244,158 +281,165 @@ class TileSelector:
                     cloud=self._get_cloud(it),
                     frac=frac,
                     covered_geom=inter,
-                    acq_date=self._get_datetime(it).date(),
+                    acq_dt=acq_dt,
+                    acq_date=acq_dt.date(),
                 )
             )
 
         return infos, proj, aoi_area_geom, aoi_area_value
 
     # ------------------------------------------------------------------
-    # Internals: scoring + choosing
+    # Internals: choose best timestamp around an anchor
     # ------------------------------------------------------------------
-    def _select_best_combo(
+    def _choose_best_timestamp(
         self,
-        infos: Sequence[CoverageInfo],
-        aoi_area_value: float,
         *,
-        anchor_date: Optional[date] = None,
-    ) -> List[CoverageInfo]:
-        """
-        Pick best [single] or [pair] among infos for a given pool.
-        If anchor_date is provided, ties are broken by closeness to anchor.
-        """
-        if not infos or aoi_area_value <= 0:
-            return []
-
-        # 1) Best single full-cover
-        full_singles = [ci for ci in infos if ci.frac >= self.full_cover_threshold]
-        if full_singles:
-            return [min(full_singles, key=lambda ci: self._single_sort_key(ci, anchor_date))]
-
-        # 2) Best pair
-        if self.allow_pair and len(infos) >= 2:
-            best_pair = self._best_pair(infos, aoi_area_value, anchor_date=anchor_date)
-            if best_pair is not None:
-                return [best_pair[2], best_pair[3]]
-
-        # 3) Fallback: best coverage single then least cloud then closeness
-        best_single = max(
-            infos,
-            key=lambda ci: (ci.frac, -ci.cloud, -self._date_closeness_bonus(ci, anchor_date)),
-        )
-        return [best_single]
-
-    def _single_sort_key(self, ci: CoverageInfo, anchor_date: Optional[date]):
-        # lower cloud is better; if tie, higher coverage; if tie, closer to anchor
-        return (
-            float(ci.cloud),
-            -float(ci.frac),
-            self._date_distance_days(ci.acq_date, anchor_date) if anchor_date else 0,
-        )
-
-    def _date_distance_days(self, d: date, anchor: Optional[date]) -> int:
-        if anchor is None:
-            return 0
-        return abs((d - anchor).days)
-
-    def _date_closeness_bonus(self, ci: CoverageInfo, anchor_date: Optional[date]) -> float:
-        # Larger bonus for closer dates (used as a tie-breaker only)
-        if anchor_date is None:
-            return 0.0
-        return -float(abs((ci.acq_date - anchor_date).days))
-
-    def _pair_cloud_score(self, a: CoverageInfo, b: CoverageInfo, aoi_area_value: float) -> float:
-        """
-        AOI-weighted cloud score, avoiding overlap double counting.
-        Uses min(cloud) on overlap as a pragmatic mosaic-style approximation.
-        """
-        if aoi_area_value <= 0:
-            return float("inf")
-
-        overlap = a.covered_geom.intersection(b.covered_geom)
-        a_only = a.covered_geom.difference(b.covered_geom)
-        b_only = b.covered_geom.difference(a.covered_geom)
-
-        area_overlap = float(overlap.area) if not overlap.is_empty else 0.0
-        area_a_only = float(a_only.area) if not a_only.is_empty else 0.0
-        area_b_only = float(b_only.area) if not b_only.is_empty else 0.0
-
-        weighted = (
-            a.cloud * area_a_only
-            + b.cloud * area_b_only
-            + min(a.cloud, b.cloud) * area_overlap
-        )
-        return float(weighted / aoi_area_value)
-
-    def _best_pair(
-        self,
-        infos: Sequence[CoverageInfo],
+        candidate_dts: List[datetime],
+        by_dt: Dict[datetime, List[CoverageInfo]],
         aoi_area_value: float,
-        *,
-        anchor_date: Optional[date] = None,
-    ) -> Optional[Tuple[float, float, CoverageInfo, CoverageInfo]]:
+        anchor: date,
+    ) -> Optional[Tuple[float, float, datetime, List[CoverageInfo]]]:
         """
-        Returns (covered_frac, score, a, b) for best pair by:
-          - prefer pairs achieving full_cover_threshold
-          - then lower AOI-weighted cloud score
-          - then higher covered_frac
-          - then closer to anchor_date (tie-break)
+        For each real acquisition timestamp dt:
+          - compute best union of tiles that covers AOI (or best-coverage fallback)
+          - cloud_score = max(cloud among tiles in chosen union)
+        Choose dt with minimal cloud_score (ties: higher coverage, closer to anchor, fewer tiles).
+        Returns (coverage_frac, cloud_score, chosen_dt, chosen_infos)
         """
-        if aoi_area_value <= 0:
-            return None
+        best: Optional[Tuple[float, float, datetime, List[CoverageInfo]]] = None
 
-        best: Optional[Tuple[float, float, CoverageInfo, CoverageInfo]] = None
-
-        for a, b in combinations(infos, 2):
-            union_geom = a.covered_geom.union(b.covered_geom)
-            cov_frac = float(union_geom.area) / aoi_area_value
-            score = self._pair_cloud_score(a, b, aoi_area_value)
-
-            if best is None:
-                best = (cov_frac, score, a, b)
+        for dt in candidate_dts:
+            infos = by_dt.get(dt, [])
+            if not infos:
                 continue
 
-            best_cov, best_score, best_a, best_b = best
+            chosen = self._best_union_for_timestamp(infos, aoi_area_value)
+            if chosen is None:
+                continue
 
-            a_full = cov_frac >= self.full_cover_threshold
-            b_full = best_cov >= self.full_cover_threshold
+            cov_frac, chosen_infos = chosen
+            cloud_score = self._union_cloud_score_max(chosen_infos)
 
-            better = False
-            if a_full and not b_full:
-                better = True
-            elif a_full == b_full:
-                if score < best_score - 1e-12:
-                    better = True
-                elif abs(score - best_score) <= 1e-12 and cov_frac > best_cov + 1e-12:
-                    better = True
-                elif abs(score - best_score) <= 1e-12 and abs(cov_frac - best_cov) <= 1e-12 and anchor_date:
-                    # tie-break: prefer closer average acquisition date to anchor
-                    cur_dist = self._pair_anchor_distance_days(a, b, anchor_date)
-                    best_dist = self._pair_anchor_distance_days(best_a, best_b, anchor_date)
-                    if cur_dist < best_dist:
-                        better = True
+            if best is None:
+                best = (cov_frac, cloud_score, dt, chosen_infos)
+                continue
 
-            if better:
-                best = (cov_frac, score, a, b)
+            best_cov, best_cloud, best_dt, best_infos = best
+
+            # primary: lower cloud_score
+            if cloud_score < best_cloud - 1e-12:
+                best = (cov_frac, cloud_score, dt, chosen_infos)
+                continue
+
+            if abs(cloud_score - best_cloud) <= 1e-12:
+                # tie 1: higher coverage
+                if cov_frac > best_cov + 1e-12:
+                    best = (cov_frac, cloud_score, dt, chosen_infos)
+                    continue
+
+                if abs(cov_frac - best_cov) <= 1e-12:
+                    # tie 2: closer acquisition date to anchor
+                    dist = abs((dt.date() - anchor).days)
+                    best_dist = abs((best_dt.date() - anchor).days)
+                    if dist < best_dist:
+                        best = (cov_frac, cloud_score, dt, chosen_infos)
+                        continue
+
+                    if dist == best_dist:
+                        # tie 3: fewer tiles
+                        if len(chosen_infos) < len(best_infos):
+                            best = (cov_frac, cloud_score, dt, chosen_infos)
+                            continue
 
         return best
 
-    def _pair_anchor_distance_days(self, a: CoverageInfo, b: CoverageInfo, anchor: date) -> float:
-        # distance of average acquisition date to anchor
-        da = a.acq_date
-        db = b.acq_date
-        mid = da + timedelta(days=(db - da).days / 2) if da <= db else db + timedelta(days=(da - db).days / 2)
-        return abs((mid - anchor).days)
+    # ------------------------------------------------------------------
+    # Internals: unions within a timestamp group
+    # ------------------------------------------------------------------
+    def _best_union_for_timestamp(
+        self,
+        infos: Sequence[CoverageInfo],
+        aoi_area_value: float,
+    ) -> Optional[Tuple[float, List[CoverageInfo]]]:
+        """
+        Find best union of tiles *within the same acquisition timestamp*.
+
+        Preference:
+          - any union with coverage >= full_cover_threshold wins over non-full
+          - within same "full vs not full": minimize union cloud_score = max(cloud)
+          - then maximize coverage
+          - then fewer tiles
+
+        If allow_union is False, only consider singles.
+        """
+        if not infos or aoi_area_value <= 0:
+            return None
+
+        max_k = 1
+        if self.allow_union:
+            max_k = max(1, self.max_union_tiles)
+
+        best: Optional[Tuple[float, float, List[CoverageInfo]]] = None  # (cov_frac, cloud_score, infos)
+
+        # enumerate unions of size 1..max_k
+        for k in range(1, min(max_k, len(infos)) + 1):
+            for combo in combinations(infos, k):
+                union_geom = combo[0].covered_geom
+                for ci in combo[1:]:
+                    union_geom = union_geom.union(ci.covered_geom)
+
+                cov_frac = float(union_geom.area) / aoi_area_value
+                cloud_score = self._union_cloud_score_max(combo)
+
+                if cov_frac < self.min_intersection_frac:
+                    continue
+
+                if best is None:
+                    best = (cov_frac, cloud_score, list(combo))
+                    continue
+
+                best_cov, best_cloud, best_combo = best
+
+                full = cov_frac >= self.full_cover_threshold
+                best_full = best_cov >= self.full_cover_threshold
+
+                better = False
+                if full and not best_full:
+                    better = True
+                elif full == best_full:
+                    if cloud_score < best_cloud - 1e-12:
+                        better = True
+                    elif abs(cloud_score - best_cloud) <= 1e-12 and cov_frac > best_cov + 1e-12:
+                        better = True
+                    elif (
+                        abs(cloud_score - best_cloud) <= 1e-12
+                        and abs(cov_frac - best_cov) <= 1e-12
+                        and len(combo) < len(best_combo)
+                    ):
+                        better = True
+
+                if better:
+                    best = (cov_frac, cloud_score, list(combo))
+
+        if best is None:
+            return None
+
+        cov_frac, _, combo_infos = best
+        return cov_frac, combo_infos
+
+    def _union_cloud_score_max(self, combo: Sequence[CoverageInfo]) -> float:
+        # Your rule: for a union, the cloud score is the MAX cloud among the tiles in the union.
+        return float(max(ci.cloud for ci in combo)) if combo else float("inf")
 
     # ------------------------------------------------------------------
-    # Smoke test (for development only)
+    # Smoke test
     # ------------------------------------------------------------------
     @staticmethod
     def smoke_test() -> None:
         from datetime import timezone
         from shapely.geometry import box, mapping
 
-        print("=== TileSelector Smoke Test ===")
+        print("=== TileSelector Smoke Test (regular anchors) ===")
 
         def _item(item_id: str, geom, dt: datetime, cloud: float):
             return {
@@ -407,57 +451,38 @@ class TileSelector:
                 },
             }
 
-        # AOI: 2x2 square
         aoi = box(0, 0, 2, 2)
 
-        selector = TileSelector(full_cover_threshold=0.999, allow_pair=True)
+        # Two timestamps in window: pick the one with smaller MAX-cloud union
+        dt_a = datetime(2024, 1, 10, 9, 0, tzinfo=timezone.utc)  # timestamp A
+        dt_b = datetime(2024, 1, 12, 9, 0, tzinfo=timezone.utc)  # timestamp B
 
-        # ---- Items across multiple dates ----
-        dt0 = datetime(2024, 1, 1, 9, 0, tzinfo=timezone.utc)
-        dt1 = datetime(2024, 1, 6, 9, 0, tzinfo=timezone.utc)
-        dt2 = datetime(2024, 1, 11, 9, 0, tzinfo=timezone.utc)
-        dt3 = datetime(2024, 1, 16, 9, 0, tzinfo=timezone.utc)
+        # Timestamp A needs a pair to cover AOI: clouds 2 and 9 -> score max=9
+        left_a = _item("left_a", box(0, 0, 1, 2), dt_a, 2.0)
+        right_a = _item("right_a", box(1, 0, 2, 2), dt_a, 9.0)
 
-        # Date 1: two full-cover tiles, choose lowest cloud
-        full_hi = _item("full_hi", box(0, 0, 2, 2), dt0, 20.0)
-        full_lo = _item("full_lo", box(0, 0, 2, 2), dt0, 5.0)
+        # Timestamp B single covers AOI with cloud 6 -> score=6 (should win)
+        full_b = _item("full_b", box(0, 0, 2, 2), dt_b, 6.0)
 
-        # Date 2: only pair can cover
-        left = _item("left", box(0, 0, 1, 2), dt1, 2.0)
-        right = _item("right", box(1, 0, 2, 2), dt1, 3.0)
+        selector = TileSelector(full_cover_threshold=0.999, allow_union=True, max_union_tiles=2)
 
-        # Another date: full cover but higher cloud than best in window
-        full_mid = _item("full_mid", box(0, 0, 2, 2), dt2, 8.0)
+        selected = selector.select_regular_time_series(
+            items=[left_a, right_a, full_b],
+            aoi_geom_4326=aoi,
+            period_start=date(2024, 1, 1),
+            period_end=date(2024, 1, 31),
+            n_anchors=3,
+            window_days=15,
+        )
 
-        # Another date: very low cloud but partial (should not beat a full-cover single if pair/full exists)
-        tiny = _item("tiny", box(0, 0, 0.5, 0.5), dt3, 0.0)
+        for s in selected:
+            ids = [it["id"] for it in s.items]
+            print(f"anchor={s.anchor_date} -> acq={s.acq_dt.date()} ids={ids} cloud_score={s.cloud_score:.2f} cov={s.coverage_frac:.3f}")
 
-        items = [full_hi, full_lo, left, right, full_mid, tiny]
-
-        # ---- Per-date selection ----
-        per_date = selector.select_best_items_per_date(items, aoi)
-        print("Per-date selection:")
-        for d in sorted(per_date):
-            ids = [it["id"] for it in per_date[d]]
-            print(f"  {d} -> {ids}")
-
-        assert per_date[dt0.date()][0]["id"] == "full_lo", "Per-date: wrong full-cover choice"
-        assert set(it["id"] for it in per_date[dt1.date()]) == {"left", "right"}, "Per-date: wrong pair choice"
-
-        # ---- Sliding window selection (15 days, step 5) ----
-        sliding = selector.select_best_items_sliding_window(items, aoi, window_days=15, step_days=5)
-        print("Sliding-window selection (15d window, 5d step):")
-        for d in sorted(sliding):
-            ids = [it["id"] for it in sliding[d]]
-            print(f"  {d} -> {ids}")
-
-        # Anchor at 2024-01-01: window includes dt0..dt8 => should pick full_lo (full cover, 5.0 cloud)
-        first_anchor = min(sliding.keys())
-        assert sliding[first_anchor][0]["id"] == "full_lo", "Sliding: first anchor should pick full_lo"
-
+        assert any(s.cloud_score == 6.0 for s in selected), "Expected the full_b scene to be selected at least once"
         print("✓ Smoke test OK")
 
 
-# Allow quick test: python -m geo.tile_selection
 if __name__ == "__main__":
     TileSelector.smoke_test()
+
