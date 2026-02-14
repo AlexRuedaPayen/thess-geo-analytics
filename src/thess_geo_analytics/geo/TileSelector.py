@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import date, datetime, timedelta
 from itertools import combinations
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -25,15 +25,33 @@ class CoverageInfo:
     cloud: float
     frac: float              # fraction of AOI covered by this item's footprint
     covered_geom: Any        # AOI ∩ footprint (in an area CRS if pyproj available)
+    acq_date: date           # acquisition date (UTC)
 
 
 class TileSelector:
     """
-    Selects the least-cloudy tile per date that covers the full AOI.
-    If no single tile covers the AOI for a date, optionally selects the best pair
-    whose union covers the AOI (or best available pair by coverage/cloud).
+    Select least-cloudy items that cover the AOI.
+
+    Selection options:
+      1) Per-date: pick best combo for each acquisition date.
+      2) Sliding window: pick best combo within a centered window around anchor dates.
+
+    Coverage rules:
+      - Prefer a single item that fully covers AOI (>= full_cover_threshold).
+      - If not available, optionally consider pairs; prefer full-cover pairs.
+      - Fallback to best-coverage single.
+
+    Cloud scoring for pairs:
+      Uses an AOI-weighted score that avoids double-counting overlap:
+        score = (cloud_a * area(a_only) + cloud_b * area(b_only) + min(cloud_a, cloud_b) * area(overlap)) / aoi_area
+
+      Note: cloud is scene-level metadata, not per-pixel; using min() on overlap is a pragmatic
+      approximation consistent with mosaicking "take the better tile where both exist".
     """
 
+    # ------------------------------------------------------------------
+    # Initialization
+    # ------------------------------------------------------------------
     def __init__(
         self,
         *,
@@ -49,49 +67,91 @@ class TileSelector:
         self.cloud_keys = tuple(cloud_keys)
         self.datetime_key = datetime_key
 
-    # ---------- Public API ----------
-
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
     def select_best_items_per_date(
         self,
         items: Sequence[ItemLike],
         aoi_geom_4326,
     ) -> Dict[date, List[ItemLike]]:
         """
-        Returns {date: [item] or [item1, item2]}.
+        Returns {acq_date: [item] or [item1, item2]}.
         """
         by_date = self._group_by_date(items)
         selected: Dict[date, List[ItemLike]] = {}
 
         for d, day_items in by_date.items():
-            infos, proj, aoi_area_geom, aoi_area_value = self._coverage_infos(
-                day_items, aoi_geom_4326
-            )
+            infos, _, _, aoi_area_value = self._coverage_infos(day_items, aoi_geom_4326)
             if not infos:
                 continue
 
-            # 1) Single item full cover -> least cloudy
-            full = [ci for ci in infos if ci.frac >= self.full_cover_threshold]
-            if full:
-                best = min(full, key=lambda ci: (ci.cloud, -ci.frac))
-                selected[d] = [best.item]
-                continue
-
-            # 2) Pair cover (union) -> prefer full cover; then lowest cloud sum; then highest coverage
-            if self.allow_pair and len(infos) >= 2:
-                best_pair = self._best_pair(infos, aoi_area_value)
-                if best_pair is not None:
-                    _, _, a, b = best_pair
-                    selected[d] = [a.item, b.item]
-                    continue
-
-            # 3) Fallback: best single by coverage then least cloud
-            best = max(infos, key=lambda ci: (ci.frac, -ci.cloud))
-            selected[d] = [best.item]
+            chosen_infos = self._select_best_combo(infos, aoi_area_value)
+            selected[d] = [ci.item for ci in chosen_infos]
 
         return selected
 
-    # ---------- Internals ----------
+    def select_best_items_sliding_window(
+        self,
+        items: Sequence[ItemLike],
+        aoi_geom_4326,
+        *,
+        window_days: int = 15,
+        step_days: int = 5,
+    ) -> Dict[date, List[ItemLike]]:
+        """
+        Sliding window selection.
 
+        Anchors every `step_days` between min_date..max_date.
+        For each anchor date A, considers items with acquisition dates in:
+            [A - floor(window_days/2), A + floor(window_days/2)]
+
+        Returns {anchor_date: [item] or [item1, item2]}.
+        """
+        if not items:
+            return {}
+
+        # Work from unique acquisition dates present in the items
+        dates = sorted({self._get_datetime(it).date() for it in items})
+        if not dates:
+            return {}
+
+        min_d, max_d = dates[0], dates[-1]
+        half = window_days // 2
+
+        anchors: List[date] = []
+        cur = min_d
+        while cur <= max_d:
+            anchors.append(cur)
+            cur = cur + timedelta(days=step_days)
+
+        selected: Dict[date, List[ItemLike]] = {}
+
+        # Precompute coverage infos once for all items (more efficient + consistent)
+        infos_all, _, _, aoi_area_value = self._coverage_infos(items, aoi_geom_4326)
+        if not infos_all or aoi_area_value <= 0:
+            return {}
+
+        for anchor in anchors:
+            lo = anchor - timedelta(days=half)
+            hi = anchor + timedelta(days=half)
+
+            window_infos = [ci for ci in infos_all if lo <= ci.acq_date <= hi]
+            if not window_infos:
+                continue
+
+            chosen_infos = self._select_best_combo(
+                window_infos,
+                aoi_area_value,
+                anchor_date=anchor,
+            )
+            selected[anchor] = [ci.item for ci in chosen_infos]
+
+        return selected
+
+    # ------------------------------------------------------------------
+    # Internals: item access
+    # ------------------------------------------------------------------
     def _get_prop(self, item: ItemLike, key: str, default=None):
         if hasattr(item, "properties"):
             return item.properties.get(key, default)
@@ -129,6 +189,9 @@ class TileSelector:
             grouped.setdefault(d, []).append(it)
         return grouped
 
+    # ------------------------------------------------------------------
+    # Internals: projection + coverage
+    # ------------------------------------------------------------------
     def _to_area_crs(self, aoi_geom_4326):
         """
         Projects to a UTM zone based on AOI centroid for robust area/coverage comparisons.
@@ -181,21 +244,102 @@ class TileSelector:
                     cloud=self._get_cloud(it),
                     frac=frac,
                     covered_geom=inter,
+                    acq_date=self._get_datetime(it).date(),
                 )
             )
 
         return infos, proj, aoi_area_geom, aoi_area_value
 
+    # ------------------------------------------------------------------
+    # Internals: scoring + choosing
+    # ------------------------------------------------------------------
+    def _select_best_combo(
+        self,
+        infos: Sequence[CoverageInfo],
+        aoi_area_value: float,
+        *,
+        anchor_date: Optional[date] = None,
+    ) -> List[CoverageInfo]:
+        """
+        Pick best [single] or [pair] among infos for a given pool.
+        If anchor_date is provided, ties are broken by closeness to anchor.
+        """
+        if not infos or aoi_area_value <= 0:
+            return []
+
+        # 1) Best single full-cover
+        full_singles = [ci for ci in infos if ci.frac >= self.full_cover_threshold]
+        if full_singles:
+            return [min(full_singles, key=lambda ci: self._single_sort_key(ci, anchor_date))]
+
+        # 2) Best pair
+        if self.allow_pair and len(infos) >= 2:
+            best_pair = self._best_pair(infos, aoi_area_value, anchor_date=anchor_date)
+            if best_pair is not None:
+                return [best_pair[2], best_pair[3]]
+
+        # 3) Fallback: best coverage single then least cloud then closeness
+        best_single = max(
+            infos,
+            key=lambda ci: (ci.frac, -ci.cloud, -self._date_closeness_bonus(ci, anchor_date)),
+        )
+        return [best_single]
+
+    def _single_sort_key(self, ci: CoverageInfo, anchor_date: Optional[date]):
+        # lower cloud is better; if tie, higher coverage; if tie, closer to anchor
+        return (
+            float(ci.cloud),
+            -float(ci.frac),
+            self._date_distance_days(ci.acq_date, anchor_date) if anchor_date else 0,
+        )
+
+    def _date_distance_days(self, d: date, anchor: Optional[date]) -> int:
+        if anchor is None:
+            return 0
+        return abs((d - anchor).days)
+
+    def _date_closeness_bonus(self, ci: CoverageInfo, anchor_date: Optional[date]) -> float:
+        # Larger bonus for closer dates (used as a tie-breaker only)
+        if anchor_date is None:
+            return 0.0
+        return -float(abs((ci.acq_date - anchor_date).days))
+
+    def _pair_cloud_score(self, a: CoverageInfo, b: CoverageInfo, aoi_area_value: float) -> float:
+        """
+        AOI-weighted cloud score, avoiding overlap double counting.
+        Uses min(cloud) on overlap as a pragmatic mosaic-style approximation.
+        """
+        if aoi_area_value <= 0:
+            return float("inf")
+
+        overlap = a.covered_geom.intersection(b.covered_geom)
+        a_only = a.covered_geom.difference(b.covered_geom)
+        b_only = b.covered_geom.difference(a.covered_geom)
+
+        area_overlap = float(overlap.area) if not overlap.is_empty else 0.0
+        area_a_only = float(a_only.area) if not a_only.is_empty else 0.0
+        area_b_only = float(b_only.area) if not b_only.is_empty else 0.0
+
+        weighted = (
+            a.cloud * area_a_only
+            + b.cloud * area_b_only
+            + min(a.cloud, b.cloud) * area_overlap
+        )
+        return float(weighted / aoi_area_value)
+
     def _best_pair(
         self,
         infos: Sequence[CoverageInfo],
         aoi_area_value: float,
+        *,
+        anchor_date: Optional[date] = None,
     ) -> Optional[Tuple[float, float, CoverageInfo, CoverageInfo]]:
         """
-        Returns (covered_frac, cloud_sum, a, b) for best pair by:
+        Returns (covered_frac, score, a, b) for best pair by:
           - prefer pairs achieving full_cover_threshold
-          - then lower cloud_sum
+          - then lower AOI-weighted cloud score
           - then higher covered_frac
+          - then closer to anchor_date (tie-break)
         """
         if aoi_area_value <= 0:
             return None
@@ -205,92 +349,115 @@ class TileSelector:
         for a, b in combinations(infos, 2):
             union_geom = a.covered_geom.union(b.covered_geom)
             cov_frac = float(union_geom.area) / aoi_area_value
-            cloud_sum = float(a.cloud + b.cloud)
+            score = self._pair_cloud_score(a, b, aoi_area_value)
 
             if best is None:
-                best = (cov_frac, cloud_sum, a, b)
+                best = (cov_frac, score, a, b)
                 continue
 
-            best_cov, best_cloud, _, _ = best
+            best_cov, best_score, best_a, best_b = best
 
-            better = False
             a_full = cov_frac >= self.full_cover_threshold
             b_full = best_cov >= self.full_cover_threshold
 
+            better = False
             if a_full and not b_full:
                 better = True
             elif a_full == b_full:
-                if cloud_sum < best_cloud - 1e-9:
+                if score < best_score - 1e-12:
                     better = True
-                elif abs(cloud_sum - best_cloud) <= 1e-9 and cov_frac > best_cov + 1e-9:
+                elif abs(score - best_score) <= 1e-12 and cov_frac > best_cov + 1e-12:
                     better = True
+                elif abs(score - best_score) <= 1e-12 and abs(cov_frac - best_cov) <= 1e-12 and anchor_date:
+                    # tie-break: prefer closer average acquisition date to anchor
+                    cur_dist = self._pair_anchor_distance_days(a, b, anchor_date)
+                    best_dist = self._pair_anchor_distance_days(best_a, best_b, anchor_date)
+                    if cur_dist < best_dist:
+                        better = True
 
             if better:
-                best = (cov_frac, cloud_sum, a, b)
+                best = (cov_frac, score, a, b)
 
         return best
-    
 
+    def _pair_anchor_distance_days(self, a: CoverageInfo, b: CoverageInfo, anchor: date) -> float:
+        # distance of average acquisition date to anchor
+        da = a.acq_date
+        db = b.acq_date
+        mid = da + timedelta(days=(db - da).days / 2) if da <= db else db + timedelta(days=(da - db).days / 2)
+        return abs((mid - anchor).days)
+
+    # ------------------------------------------------------------------
+    # Smoke test (for development only)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def smoke_test() -> None:
+        from datetime import timezone
+        from shapely.geometry import box, mapping
+
+        print("=== TileSelector Smoke Test ===")
+
+        def _item(item_id: str, geom, dt: datetime, cloud: float):
+            return {
+                "id": item_id,
+                "geometry": mapping(geom),
+                "properties": {
+                    "datetime": dt.isoformat().replace("+00:00", "Z"),
+                    "cloud_cover": cloud,
+                },
+            }
+
+        # AOI: 2x2 square
+        aoi = box(0, 0, 2, 2)
+
+        selector = TileSelector(full_cover_threshold=0.999, allow_pair=True)
+
+        # ---- Items across multiple dates ----
+        dt0 = datetime(2024, 1, 1, 9, 0, tzinfo=timezone.utc)
+        dt1 = datetime(2024, 1, 6, 9, 0, tzinfo=timezone.utc)
+        dt2 = datetime(2024, 1, 11, 9, 0, tzinfo=timezone.utc)
+        dt3 = datetime(2024, 1, 16, 9, 0, tzinfo=timezone.utc)
+
+        # Date 1: two full-cover tiles, choose lowest cloud
+        full_hi = _item("full_hi", box(0, 0, 2, 2), dt0, 20.0)
+        full_lo = _item("full_lo", box(0, 0, 2, 2), dt0, 5.0)
+
+        # Date 2: only pair can cover
+        left = _item("left", box(0, 0, 1, 2), dt1, 2.0)
+        right = _item("right", box(1, 0, 2, 2), dt1, 3.0)
+
+        # Another date: full cover but higher cloud than best in window
+        full_mid = _item("full_mid", box(0, 0, 2, 2), dt2, 8.0)
+
+        # Another date: very low cloud but partial (should not beat a full-cover single if pair/full exists)
+        tiny = _item("tiny", box(0, 0, 0.5, 0.5), dt3, 0.0)
+
+        items = [full_hi, full_lo, left, right, full_mid, tiny]
+
+        # ---- Per-date selection ----
+        per_date = selector.select_best_items_per_date(items, aoi)
+        print("Per-date selection:")
+        for d in sorted(per_date):
+            ids = [it["id"] for it in per_date[d]]
+            print(f"  {d} -> {ids}")
+
+        assert per_date[dt0.date()][0]["id"] == "full_lo", "Per-date: wrong full-cover choice"
+        assert set(it["id"] for it in per_date[dt1.date()]) == {"left", "right"}, "Per-date: wrong pair choice"
+
+        # ---- Sliding window selection (15 days, step 5) ----
+        sliding = selector.select_best_items_sliding_window(items, aoi, window_days=15, step_days=5)
+        print("Sliding-window selection (15d window, 5d step):")
+        for d in sorted(sliding):
+            ids = [it["id"] for it in sliding[d]]
+            print(f"  {d} -> {ids}")
+
+        # Anchor at 2024-01-01: window includes dt0..dt8 => should pick full_lo (full cover, 5.0 cloud)
+        first_anchor = min(sliding.keys())
+        assert sliding[first_anchor][0]["id"] == "full_lo", "Sliding: first anchor should pick full_lo"
+
+        print("✓ Smoke test OK")
+
+
+# Allow quick test: python -m geo.tile_selection
 if __name__ == "__main__":
-    """
-    Smoke test for TileSelector.
-    Run:
-        python -m geo.TileSelector
-    """
-
-    from datetime import datetime, timezone
-    from shapely.geometry import box, mapping
-
-    print("Running TileSelector smoke test...")
-
-    def _item(item_id: str, geom, dt: datetime, cloud: float):
-        return {
-            "id": item_id,
-            "geometry": mapping(geom),
-            "properties": {
-                "datetime": dt.isoformat().replace("+00:00", "Z"),
-                "cloud_cover": cloud,
-            },
-        }
-
-    # AOI: 2x2 square
-    aoi = box(0, 0, 2, 2)
-
-    selector = TileSelector(full_cover_threshold=0.999, allow_pair=True)
-
-    # --- DATE 1: single best full-cover tile expected ---
-    dt1 = datetime(2024, 1, 1, 9, 0, tzinfo=timezone.utc)
-
-    full_hi_cloud = _item("full_hi_cloud", box(0, 0, 2, 2), dt1, 20.0)
-    full_low_cloud = _item("full_low_cloud", box(0, 0, 2, 2), dt1, 5.0)
-    partial = _item("partial", box(0, 0, 1, 2), dt1, 0.1)
-
-    # --- DATE 2: pair required ---
-    dt2 = datetime(2024, 1, 2, 9, 0, tzinfo=timezone.utc)
-
-    left = _item("left", box(0, 0, 1, 2), dt2, 2.0)
-    right = _item("right", box(1, 0, 2, 2), dt2, 3.0)
-    tiny = _item("tiny", box(0, 0, 0.2, 0.2), dt2, 0.0)
-
-    items = [
-        full_hi_cloud,
-        full_low_cloud,
-        partial,
-        left,
-        right,
-        tiny,
-    ]
-
-    result = selector.select_best_items_per_date(items, aoi)
-
-    print("Selection result:")
-    for d in sorted(result):
-        ids = [it["id"] for it in result[d]]
-        print(f"  {d} -> {ids}")
-
-    # --- Assertions ---
-    assert result[dt1.date()][0]["id"] == "full_low_cloud", \
-        "Date 1 failed: wrong single-tile selection"
-
-    assert set(it["id"] for it in result[dt2.date]())
-
+    TileSelector.smoke_test()
