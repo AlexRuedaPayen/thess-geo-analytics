@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
 from shapely.geometry import shape
@@ -14,16 +15,28 @@ from thess_geo_analytics.geo.TileSelector import TileSelector
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
 
+SelectionMode = Literal["per_date", "sliding_window"]
+
+
 @dataclass(frozen=True)
 class BuildSceneCatalogParams:
+    # --- STAC query window (relative) ---
     days: int = 90
     cloud_cover_max: float = 20.0
     max_items: int = 300
     collection: str = DEFAULT_COLLECTION
 
+    # --- selection ---
     use_tile_selector: bool = True
+    selection_mode: SelectionMode = "sliding_window"
+
+    # coverage rules
     full_cover_threshold: float = 0.999
     allow_pair: bool = True
+
+    # sliding-window params (used if selection_mode == "sliding_window")
+    window_days: int = 15
+    step_days: int = 15  # usually == window_days to keep output count manageable
 
 
 class BuildSceneCatalogPipeline:
@@ -53,48 +66,120 @@ class BuildSceneCatalogPipeline:
 
         raw_csv = RepoPaths.table("scenes_catalog.csv")
         selected_csv = RepoPaths.table("scenes_selected.csv")
+        map_csv = RepoPaths.table("scenes_selected_map.csv")
 
+        # ------------------------------------------------------------------
+        # Empty case
+        # ------------------------------------------------------------------
         if not items:
             empty = pd.DataFrame(
                 columns=["id", "datetime", "cloud_cover", "platform", "constellation", "collection"]
             )
             empty.to_csv(raw_csv, index=False)
+            print(f"[OK] STAC catalog exported => {raw_csv}")
+            print("[OK] Raw scenes found: 0")
+
             if params.use_tile_selector:
                 empty.to_csv(selected_csv, index=False)
-
-            print(f"[OK] STAC catalog exported => {raw_csv}")
-            print("[OK] Scenes found: 0")
-            if params.use_tile_selector:
+                pd.DataFrame(columns=["anchor_date", "scene_ids", "scene_datetimes", "n_scenes"]).to_csv(
+                    map_csv, index=False
+                )
                 print(f"[OK] Selected scenes exported => {selected_csv}")
-            return selected_csv if params.use_tile_selector else raw_csv
+                print(f"[OK] Selection map exported => {map_csv}")
 
+                return selected_csv
+
+            return raw_csv
+
+        # ------------------------------------------------------------------
         # 2) Always write RAW catalog first
+        # ------------------------------------------------------------------
         raw_df = self.builder.service.items_to_dataframe(items, collection=params.collection)
         raw_df.to_csv(raw_csv, index=False)
         print(f"[OK] STAC catalog exported => {raw_csv}")
         print(f"[OK] Raw scenes found: {len(raw_df)}")
 
-        # 3) Optional selection -> write scenes_selected.csv
+        # ------------------------------------------------------------------
+        # 3) Optional selection -> scenes_selected.csv + scenes_selected_map.csv
+        # ------------------------------------------------------------------
         if params.use_tile_selector:
             aoi_shp = shape(aoi_geom_geojson)
+
             selector = TileSelector(
                 full_cover_threshold=params.full_cover_threshold,
                 allow_pair=params.allow_pair,
             )
 
-            by_date = selector.select_best_items_per_date(items, aoi_shp)
-            selected_items = [it for d in sorted(by_date) for it in by_date[d]]
+            if params.selection_mode == "per_date":
+                # anchor_date == acquisition_date
+                by_anchor = selector.select_best_items_per_date(items, aoi_shp)
+
+            elif params.selection_mode == "sliding_window":
+                by_anchor = selector.select_best_items_sliding_window(
+                    items,
+                    aoi_shp,
+                    window_days=params.window_days,
+                    step_days=params.step_days,
+                )
+            else:
+                raise ValueError(f"Unknown selection_mode: {params.selection_mode}")
+
+            # Flatten selected items (keep unique by id)
+            seen = set()
+            selected_items = []
+            for anchor in sorted(by_anchor):
+                for it in by_anchor[anchor]:
+                    it_id = getattr(it, "id", None) or it.get("id")
+                    if it_id in seen:
+                        continue
+                    seen.add(it_id)
+                    selected_items.append(it)
 
             selected_df = self.builder.service.items_to_dataframe(
                 selected_items, collection=params.collection
             )
             selected_df.to_csv(selected_csv, index=False)
 
+            # Build mapping table: anchor_date -> ids + real datetimes
+            map_rows = []
+            for anchor in sorted(by_anchor):
+                anchor_items = by_anchor[anchor]
+
+                ids = []
+                dts = []
+                for it in anchor_items:
+                    it_id = getattr(it, "id", None) or it.get("id")
+                    it_dt = None
+                    if hasattr(it, "properties"):
+                        it_dt = (it.properties or {}).get("datetime")
+                    else:
+                        it_dt = (it.get("properties", {}) or {}).get("datetime")
+                    if it_dt is None and hasattr(it, "datetime") and it.datetime is not None:
+                        it_dt = it.datetime.isoformat()
+
+                    ids.append(str(it_id))
+                    dts.append(str(it_dt))
+
+                map_rows.append(
+                    {
+                        "anchor_date": anchor.isoformat(),
+                        "scene_ids": ";".join(ids),
+                        "scene_datetimes": ";".join(dts),
+                        "n_scenes": len(ids),
+                    }
+                )
+
+            map_df = pd.DataFrame(map_rows)
+            map_df.to_csv(map_csv, index=False)
+
             print(f"[OK] Selected scenes exported => {selected_csv}")
+            print(f"[OK] Selection map exported => {map_csv}")
             print(f"[OK] Selected scenes: {len(selected_df)}")
-            print(f"[OK] Dates kept: {selected_df['datetime'].dt.date.nunique() if not selected_df.empty else 0}")
+            print(f"[OK] Anchors kept: {len(map_df)}")
 
             return selected_csv
 
-        # 4) If selector disabled, the ingestable file is the raw catalog
+        # ------------------------------------------------------------------
+        # 4) If selector disabled, ingestable file is the raw catalog
+        # ------------------------------------------------------------------
         return raw_csv
