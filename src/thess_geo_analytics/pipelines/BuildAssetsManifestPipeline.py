@@ -32,7 +32,7 @@ class BuildAssetsManifestPipeline:
         self._downloader: Optional[CdseAssetDownloader] = None
 
     def run(self, params: BuildAssetsManifestParams) -> Path:
-        scenes_csv = RepoPaths.table("scenes_catalog.csv")
+        scenes_csv = RepoPaths.table("scenes_selectedcsv")
         if not scenes_csv.exists():
             raise FileNotFoundError(f"Missing scenes catalog: {scenes_csv}")
 

@@ -85,7 +85,7 @@ class AssetsManifestBuilder:
         import pandas as pd
         from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
-        scenes_csv = RepoPaths.table("scenes_catalog.csv")
+        scenes_csv = RepoPaths.table("scenes_selected.csv")
         if not scenes_csv.exists():
             raise FileNotFoundError(f"Missing scenes catalog: {scenes_csv}")
 
