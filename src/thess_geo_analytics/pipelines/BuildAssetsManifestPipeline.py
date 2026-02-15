@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 
 import pandas as pd
 
@@ -14,14 +14,24 @@ from thess_geo_analytics.services.CdseTokenService import CdseTokenService
 from thess_geo_analytics.services.CdseAssetDownloader import CdseAssetDownloader
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
+SortMode = Literal["as_is", "cloud_then_time", "time"]
+
 
 @dataclass(frozen=True)
 class BuildAssetsManifestParams:
-    month: str
-    max_scenes: int = 10
+    # selection scope (applies on scenes_selected.csv)
+    max_scenes: Optional[int] = None
+    date_start: Optional[str] = None  # "YYYY-MM-DD"
+    date_end: Optional[str] = None    # "YYYY-MM-DD"
+    sort_mode: SortMode = "as_is"
+
+    # downloading
     download_n: int = 3
     download_missing: bool = True
     validate_rasterio: bool = True
+
+    # output naming
+    out_name: str = "assets_manifest_selected.csv"
 
 
 class BuildAssetsManifestPipeline:
@@ -32,21 +42,23 @@ class BuildAssetsManifestPipeline:
         self._downloader: Optional[CdseAssetDownloader] = None
 
     def run(self, params: BuildAssetsManifestParams) -> Path:
-        scenes_csv = RepoPaths.table("scenes_catalog.csv")
+        scenes_csv = RepoPaths.table("scenes_selected.csv")
         if not scenes_csv.exists():
-            raise FileNotFoundError(f"Missing scenes catalog: {scenes_csv}")
+            raise FileNotFoundError(f"Missing scenes_selected: {scenes_csv}")
 
         scenes_df = pd.read_csv(scenes_csv)
 
         build_params = AssetsManifestBuildParams(
-            month=params.month,
             max_scenes=params.max_scenes,
+            date_start=params.date_start,
+            date_end=params.date_end,
+            sort_mode=params.sort_mode,
         )
 
         manifest_df = self.builder.build_assets_manifest_df(scenes_df, build_params)
 
         RepoPaths.TABLES.mkdir(parents=True, exist_ok=True)
-        out_path = RepoPaths.table(f"assets_manifest_{params.month}.csv")
+        out_path = RepoPaths.table(params.out_name)
         manifest_df.to_csv(out_path, index=False)
 
         print(f"[OK] Assets manifest exported => {out_path}")
@@ -57,7 +69,11 @@ class BuildAssetsManifestPipeline:
             print(f"[WARN] {missing_hrefs} rows have missing hrefs (resolver mismatch)")
 
         if params.download_missing:
-            self._download_and_validate(manifest_df, download_n=params.download_n, validate=params.validate_rasterio)
+            self._download_and_validate(
+                manifest_df,
+                download_n=params.download_n,
+                validate=params.validate_rasterio,
+            )
 
         return out_path
 
@@ -69,10 +85,9 @@ class BuildAssetsManifestPipeline:
 
     def _download_and_validate(self, df: pd.DataFrame, *, download_n: int, validate: bool) -> None:
         import rasterio
-        from pathlib import Path
 
         downloader = self._get_downloader()
-        n = min(download_n, len(df))
+        n = min(int(download_n), len(df))
 
         for i in range(n):
             row = df.iloc[i]
@@ -97,7 +112,7 @@ class BuildAssetsManifestPipeline:
                 downloader.download(str(row["href_scl"]), p_scl)
 
             if validate:
-                for p in [p_b04, p_b08, p_scl]:
+                for p in (p_b04, p_b08, p_scl):
                     with rasterio.open(p) as ds:
                         _ = (ds.width, ds.height, ds.crs)
 
@@ -107,7 +122,14 @@ class BuildAssetsManifestPipeline:
     def smoke_test() -> None:
         print("=== BuildAssetsManifestPipeline Smoke Test ===")
         pipe = BuildAssetsManifestPipeline()
-        out = pipe.run(BuildAssetsManifestParams(month="2026-01", max_scenes=3, download_missing=False))
+        out = pipe.run(
+            BuildAssetsManifestParams(
+                max_scenes=None,
+                sort_mode="as_is",
+                download_missing=False,
+                out_name="assets_manifest_selected_smoke.csv",
+            )
+        )
         print("[OK] wrote:", out)
         print("✓ Smoke test OK")
 
