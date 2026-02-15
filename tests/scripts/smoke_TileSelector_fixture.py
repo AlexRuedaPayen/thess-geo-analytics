@@ -198,5 +198,10 @@ def main() -> None:
         print("[WARN] No anchors produced selections (window too small, catalog too sparse, or geometry mismatch).")
 
 
+
+### run
+
+### python tests/scripts/smoke_TileSelector_fixture.py   --fixture tests/fixtures/scenes_catalog_thin.csv  --aoi aoi/EL522_Thessaloniki.geojson   --start 2020-01-01 --end 2026-02-01   --n 12 --window 21 --max-union 2
+
 if __name__ == "__main__":
     main()
