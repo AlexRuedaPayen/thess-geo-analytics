@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, timedelta,datetime
+
 from pathlib import Path
 from typing import Literal
 
@@ -35,6 +36,7 @@ class BuildSceneCatalogParams:
     allow_pair: bool = True
 
     # sliding-window params (used if selection_mode == "sliding_window")
+    n_anchors: int = 12
     window_days: int = 15
     step_days: int = 15  # usually == window_days to keep output count manageable
 
@@ -107,77 +109,68 @@ class BuildSceneCatalogPipeline:
 
             selector = TileSelector(
                 full_cover_threshold=params.full_cover_threshold,
-                allow_pair=params.allow_pair,
+                allow_union=True,
+                max_union_tiles=2,
             )
 
-            if params.selection_mode == "per_date":
-                # anchor_date == acquisition_date
-                by_anchor = selector.select_best_items_per_date(items, aoi_shp)
+            period_start = start
+            period_end = end
 
-            elif params.selection_mode == "sliding_window":
-                by_anchor = selector.select_best_items_sliding_window(
-                    items,
-                    aoi_shp,
-                    window_days=params.window_days,
-                    step_days=params.step_days,
-                )
-            else:
-                raise ValueError(f"Unknown selection_mode: {params.selection_mode}")
-
-            # Flatten selected items (keep unique by id)
-            seen = set()
-            selected_items = []
-            for anchor in sorted(by_anchor):
-                for it in by_anchor[anchor]:
-                    it_id = getattr(it, "id", None) or it.get("id")
-                    if it_id in seen:
-                        continue
-                    seen.add(it_id)
-                    selected_items.append(it)
-
-            selected_df = self.builder.service.items_to_dataframe(
-                selected_items, collection=params.collection
+            selected_scenes = selector.select_regular_time_series(
+                items=items,
+                aoi_geom_4326=aoi_shp,
+                period_start=period_start,
+                period_end=period_end,
+                n_anchors=params.n_anchors,          # ← you must add this param
+                window_days=params.window_days,      # ← and this
             )
+
+            if not selected_scenes:
+                print("[WARN] No scenes selected for regular time series.")
+                return raw_csv
+
+            # --------------------------------------------------
+            # 1) Write scenes_selected.csv (real acquisition info)
+            # --------------------------------------------------
+
+            import pdb
+            pdb.set_trace()
+            selected_rows = []
+            for s in selected_scenes:
+                for it in s.items:
+                    selected_rows.append({
+                        "anchor_date": s.anchor_date,
+                        "acq_datetime": s.acq_dt,
+                        "scene_id": getattr(it, "id", it.get("id")),
+                        "cloud_score": s.cloud_score,
+                        "coverage_frac": s.coverage_frac,
+                    })
+
+            selected_df = pd.DataFrame(selected_rows)
             selected_df.to_csv(selected_csv, index=False)
 
-            # Build mapping table: anchor_date -> ids + real datetimes
-            map_rows = []
-            for anchor in sorted(by_anchor):
-                anchor_items = by_anchor[anchor]
-
-                ids = []
-                dts = []
-                for it in anchor_items:
-                    it_id = getattr(it, "id", None) or it.get("id")
-                    it_dt = None
-                    if hasattr(it, "properties"):
-                        it_dt = (it.properties or {}).get("datetime")
-                    else:
-                        it_dt = (it.get("properties", {}) or {}).get("datetime")
-                    if it_dt is None and hasattr(it, "datetime") and it.datetime is not None:
-                        it_dt = it.datetime.isoformat()
-
-                    ids.append(str(it_id))
-                    dts.append(str(it_dt))
-
-                map_rows.append(
-                    {
-                        "anchor_date": anchor.isoformat(),
-                        "scene_ids": ";".join(ids),
-                        "scene_datetimes": ";".join(dts),
-                        "n_scenes": len(ids),
-                    }
-                )
-
-            map_df = pd.DataFrame(map_rows)
-            map_df.to_csv(map_csv, index=False)
-
             print(f"[OK] Selected scenes exported => {selected_csv}")
-            print(f"[OK] Selection map exported => {map_csv}")
-            print(f"[OK] Selected scenes: {len(selected_df)}")
-            print(f"[OK] Anchors kept: {len(map_df)}")
+            print(f"[OK] Anchors: {len(selected_scenes)}")
+
+            # --------------------------------------------------
+            # 2) Write anchor → acquisition mapping table
+            # --------------------------------------------------
+            mapping_rows = [{
+                "anchor_date": s.anchor_date,
+                "acq_datetime": s.acq_dt,
+                "n_tiles": len(s.items),
+                "cloud_score": s.cloud_score,
+                "coverage_frac": s.coverage_frac,
+            } for s in selected_scenes]
+
+            mapping_df = pd.DataFrame(mapping_rows)
+            mapping_path = RepoPaths.table("scenes_anchor_mapping.csv")
+            mapping_df.to_csv(mapping_path, index=False)
+
+            print(f"[OK] Anchor mapping exported => {mapping_path}")
 
             return selected_csv
+
 
         # ------------------------------------------------------------------
         # 4) If selector disabled, ingestable file is the raw catalog

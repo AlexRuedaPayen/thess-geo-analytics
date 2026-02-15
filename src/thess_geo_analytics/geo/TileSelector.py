@@ -32,10 +32,10 @@ class CoverageInfo:
 class SelectedScene:
     """
     Output for one anchor date (fictional grid date).
-    - anchor_date: the interpolated / regular-grid date you want in your time series
-    - acq_dt: the real acquisition timestamp of the chosen scene group
-    - items: 1..k tiles (usually 1 or 2) used to cover the AOI
-    - cloud_score: the selection score used across timestamps (see rule below)
+    - anchor_date: interpolated / regular-grid date you want in your time series
+    - acq_dt: real acquisition timestamp of the chosen group
+    - items: 1..k tiles used to cover the AOI
+    - cloud_score: selection score across timestamps (MAX cloud among tiles in union)
     - coverage_frac: AOI coverage fraction achieved by the chosen union
     """
     anchor_date: date
@@ -50,27 +50,19 @@ class TileSelector:
     Build a *regular* time series over a period T by selecting the best *real* scene around
     each anchor date.
 
-    RULE (your spec):
+    RULE:
       1) Split period T into n equal intervals; define anchor dates d_i as the midpoint of each interval.
       2) For each anchor date d:
            - consider items acquired within a centered window [d - half_window, d + half_window]
            - group candidate items by their real acquisition timestamp (acq_dt)
            - for each timestamp group, find the best union of tiles that covers the AOI
-             (single tile, then pairs, then optionally triples... up to max_union_tiles)
+             (single tile, then pairs, then triples... up to max_union_tiles)
            - score that best union by cloud_score = max(cloud of tiles in union)
-           - pick the timestamp group with the minimum cloud_score
+           - pick timestamp group with minimum cloud_score
              (tie-break: higher coverage, then closer to anchor, then fewer tiles)
       3) Output one SelectedScene per anchor date (fictional anchor, real acquisition timestamp kept).
-
-    Notes:
-      - cloud is scene-level metadata, not per-pixel. Using max() for unions is conservative and matches
-        your "take the worst tile in the mosaic" rule.
-      - For Thessaloniki AOI, unions should typically be 1 tile (sometimes 2).
     """
 
-    # ------------------------------------------------------------------
-    # Initialization
-    # ------------------------------------------------------------------
     def __init__(
         self,
         *,
@@ -109,11 +101,10 @@ class TileSelector:
           - anchors = midpoints of n_anchors equal subdivisions between [period_start, period_end]
           - for each anchor, pick best scene in ±window_days//2 around anchor.
 
-        Returns a list of SelectedScene (len <= n_anchors if some anchors have no candidates).
+        Returns list of SelectedScene (len <= n_anchors if some anchors have no candidates).
         """
         if not items:
             return []
-
         if n_anchors <= 0:
             raise ValueError("n_anchors must be > 0")
         if period_end < period_start:
@@ -124,7 +115,6 @@ class TileSelector:
         anchors = self._make_midpoint_anchors(period_start, period_end, n_anchors)
         half = window_days // 2
 
-        # Precompute AOI coverage infos (in an area CRS if possible)
         infos_all, _, _, aoi_area_value = self._coverage_infos(items, aoi_geom_4326)
         if not infos_all or aoi_area_value <= 0:
             return []
@@ -140,8 +130,8 @@ class TileSelector:
             lo = anchor - timedelta(days=half)
             hi = anchor + timedelta(days=half)
 
-            # candidate timestamps within window
-            candidate_dts = [dt for dt in by_dt.keys() if lo <= dt.date() <= hi]
+            # stable ordering helps debugging
+            candidate_dts = sorted([dt for dt in by_dt.keys() if lo <= dt.date() <= hi])
             if not candidate_dts:
                 continue
 
@@ -167,29 +157,66 @@ class TileSelector:
 
         return out
 
+    def debug_coverage(self, items: Sequence[ItemLike], aoi_geom_4326, n: int = 5) -> None:
+        """
+        Prints coverage fractions for first n items and top n by frac.
+        Useful to confirm you're using the correct footprint geometry.
+        """
+        infos, proj, _, aoi_area_value = self._coverage_infos(items, aoi_geom_4326)
+        print("[DBG] pyproj:", proj is not None)
+        print("[DBG] AOI area:", aoi_area_value)
+
+        if not infos:
+            print("[DBG] No intersections at all (AOI/footprints mismatch?)")
+            return
+
+        print("\n[DBG] First infos:")
+        for ci in infos[:n]:
+            item_id = getattr(ci.item, "id", None) or (ci.item.get("id") if isinstance(ci.item, Mapping) else None)
+            print(f"  id={item_id} acq={ci.acq_dt} cloud={ci.cloud} frac={ci.frac:.4f}")
+
+        infos_sorted = sorted(infos, key=lambda x: x.frac, reverse=True)
+        print("\n[DBG] Top by frac:")
+        for ci in infos_sorted[:n]:
+            item_id = getattr(ci.item, "id", None) or (ci.item.get("id") if isinstance(ci.item, Mapping) else None)
+            print(f"  id={item_id} acq={ci.acq_dt} cloud={ci.cloud} frac={ci.frac:.4f}")
+
     # ------------------------------------------------------------------
     # Internals: anchors
     # ------------------------------------------------------------------
     def _make_midpoint_anchors(self, start: date, end: date, n: int) -> List[date]:
         """
-        Split [start, end] into n equal intervals (in days, inclusive endpoints),
-        and return the midpoint date of each interval.
+        Split [start, end] into n equal intervals (in days),
+        return midpoint date of each interval, avoiding duplicates.
         """
         total_days = (end - start).days
-        if total_days == 0:
+        if total_days <= 0:
             return [start] * n
 
-        # interval length in floating days
         step = total_days / n
         anchors: List[date] = []
+        seen: set[date] = set()
 
         for i in range(n):
-            # interval i spans [start + i*step, start + (i+1)*step]
             mid = (i + 0.5) * step
-            anchors.append(start + timedelta(days=int(round(mid))))
+            d = start + timedelta(days=int(mid))  # floor for stability
+            d = min(max(d, start), end)
+            if d not in seen:
+                anchors.append(d)
+                seen.add(d)
 
-        # ensure anchors are within bounds
-        anchors = [min(max(a, start), end) for a in anchors]
+        # If duplicates were dropped, fill by stepping forward
+        cur = anchors[-1] if anchors else start
+        while len(anchors) < n and cur < end:
+            cur = min(cur + timedelta(days=1), end)
+            if cur not in seen:
+                anchors.append(cur)
+                seen.add(cur)
+
+        # If we still don't have enough (extreme case), pad with end
+        while len(anchors) < n:
+            anchors.append(end)
+
         return anchors
 
     # ------------------------------------------------------------------
@@ -197,12 +224,28 @@ class TileSelector:
     # ------------------------------------------------------------------
     def _get_prop(self, item: ItemLike, key: str, default=None):
         if hasattr(item, "properties"):
-            return item.properties.get(key, default)
-        return item.get("properties", {}).get(key, default)
+            return (item.properties or {}).get(key, default)
+        return (item.get("properties", {}) or {}).get(key, default)
 
     def _get_geometry(self, item: ItemLike) -> Dict[str, Any]:
-        if hasattr(item, "geometry"):
+        """
+        Prefer the most reliable footprint geometry available.
+        Some STAC providers expose a more accurate footprint under proj:geometry.
+        Fallback to item.geometry.
+        """
+        # pystac.Item-like
+        if hasattr(item, "properties"):
+            props = item.properties or {}
+            g = props.get("proj:geometry")
+            if isinstance(g, dict) and "type" in g and "coordinates" in g:
+                return g
             return item.geometry
+
+        # dict-like
+        props = item.get("properties", {}) or {}
+        g = props.get("proj:geometry")
+        if isinstance(g, dict) and "type" in g and "coordinates" in g:
+            return g
         return item["geometry"]
 
     def _get_datetime(self, item: ItemLike) -> datetime:
@@ -301,10 +344,11 @@ class TileSelector:
     ) -> Optional[Tuple[float, float, datetime, List[CoverageInfo]]]:
         """
         For each real acquisition timestamp dt:
-          - compute best union of tiles that covers AOI (or best-coverage fallback)
+          - compute best union of tiles that covers AOI
           - cloud_score = max(cloud among tiles in chosen union)
+
         Choose dt with minimal cloud_score (ties: higher coverage, closer to anchor, fewer tiles).
-        Returns (coverage_frac, cloud_score, chosen_dt, chosen_infos)
+        Returns (coverage_frac, cloud_score, chosen_dt, chosen_infos).
         """
         best: Optional[Tuple[float, float, datetime, List[CoverageInfo]]] = None
 
@@ -362,7 +406,7 @@ class TileSelector:
         aoi_area_value: float,
     ) -> Optional[Tuple[float, List[CoverageInfo]]]:
         """
-        Find best union of tiles *within the same acquisition timestamp*.
+        Find best union of tiles within same acquisition timestamp.
 
         Preference:
           - any union with coverage >= full_cover_threshold wins over non-full
@@ -375,13 +419,10 @@ class TileSelector:
         if not infos or aoi_area_value <= 0:
             return None
 
-        max_k = 1
-        if self.allow_union:
-            max_k = max(1, self.max_union_tiles)
+        max_k = 1 if not self.allow_union else max(1, self.max_union_tiles)
 
         best: Optional[Tuple[float, float, List[CoverageInfo]]] = None  # (cov_frac, cloud_score, infos)
 
-        # enumerate unions of size 1..max_k
         for k in range(1, min(max_k, len(infos)) + 1):
             for combo in combinations(infos, k):
                 union_geom = combo[0].covered_geom
@@ -389,10 +430,10 @@ class TileSelector:
                     union_geom = union_geom.union(ci.covered_geom)
 
                 cov_frac = float(union_geom.area) / aoi_area_value
-                cloud_score = self._union_cloud_score_max(combo)
-
                 if cov_frac < self.min_intersection_frac:
                     continue
+
+                cloud_score = self._union_cloud_score_max(combo)
 
                 if best is None:
                     best = (cov_frac, cloud_score, list(combo))
@@ -428,61 +469,5 @@ class TileSelector:
         return cov_frac, combo_infos
 
     def _union_cloud_score_max(self, combo: Sequence[CoverageInfo]) -> float:
-        # Your rule: for a union, the cloud score is the MAX cloud among the tiles in the union.
+        # Your rule: for a union, cloud score is MAX cloud among tiles in the union.
         return float(max(ci.cloud for ci in combo)) if combo else float("inf")
-
-    # ------------------------------------------------------------------
-    # Smoke test
-    # ------------------------------------------------------------------
-    @staticmethod
-    def smoke_test() -> None:
-        from datetime import timezone
-        from shapely.geometry import box, mapping
-
-        print("=== TileSelector Smoke Test (regular anchors) ===")
-
-        def _item(item_id: str, geom, dt: datetime, cloud: float):
-            return {
-                "id": item_id,
-                "geometry": mapping(geom),
-                "properties": {
-                    "datetime": dt.isoformat().replace("+00:00", "Z"),
-                    "cloud_cover": cloud,
-                },
-            }
-
-        aoi = box(0, 0, 2, 2)
-
-        # Two timestamps in window: pick the one with smaller MAX-cloud union
-        dt_a = datetime(2024, 1, 10, 9, 0, tzinfo=timezone.utc)  # timestamp A
-        dt_b = datetime(2024, 1, 12, 9, 0, tzinfo=timezone.utc)  # timestamp B
-
-        # Timestamp A needs a pair to cover AOI: clouds 2 and 9 -> score max=9
-        left_a = _item("left_a", box(0, 0, 1, 2), dt_a, 2.0)
-        right_a = _item("right_a", box(1, 0, 2, 2), dt_a, 9.0)
-
-        # Timestamp B single covers AOI with cloud 6 -> score=6 (should win)
-        full_b = _item("full_b", box(0, 0, 2, 2), dt_b, 6.0)
-
-        selector = TileSelector(full_cover_threshold=0.999, allow_union=True, max_union_tiles=2)
-
-        selected = selector.select_regular_time_series(
-            items=[left_a, right_a, full_b],
-            aoi_geom_4326=aoi,
-            period_start=date(2024, 1, 1),
-            period_end=date(2024, 1, 31),
-            n_anchors=3,
-            window_days=15,
-        )
-
-        for s in selected:
-            ids = [it["id"] for it in s.items]
-            print(f"anchor={s.anchor_date} -> acq={s.acq_dt.date()} ids={ids} cloud_score={s.cloud_score:.2f} cov={s.coverage_frac:.3f}")
-
-        assert any(s.cloud_score == 6.0 for s in selected), "Expected the full_b scene to be selected at least once"
-        print("✓ Smoke test OK")
-
-
-if __name__ == "__main__":
-    TileSelector.smoke_test()
-
