@@ -38,3 +38,6 @@ DATA_LAKE/
 
 #old classes
 old/
+
+#tests fixtures
+tests/fixtures/
