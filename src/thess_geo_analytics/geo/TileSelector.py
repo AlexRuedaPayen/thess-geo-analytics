@@ -44,6 +44,95 @@ class SelectedScene:
     cloud_score: float
     coverage_frac: float
 
+@dataclass(frozen=True)
+class RankedCandidate:
+    """
+    A ranked candidate for one anchor date.
+
+    - acq_dt: real acquisition timestamp
+    - items: chosen union of tiles for that timestamp
+    - cloud_score: max cloud in the union (your rule)
+    - coverage_frac: AOI coverage fraction achieved by the union
+    - dist_days: |acq_date - anchor_date| in days (tie-break info)
+    """
+    anchor_date: date
+    acq_dt: datetime
+    items: List[ItemLike]
+    cloud_score: float
+    coverage_frac: float
+    dist_days: int
+
+@dataclass(frozen=True)
+class AnchorCandidate:
+    anchor_date: date
+    acq_dt: datetime
+    items: List[ItemLike]
+    cloud_score: float
+    coverage_frac: float
+    dist_days: int
+
+    def rank_candidates_for_anchor(
+        self,
+        items: Sequence[ItemLike],
+        aoi_geom_4326,
+        *,
+        anchor_date: date,
+        window_days: int = 15,
+        top_k: int = 10,
+    ) -> List[AnchorCandidate]:
+        """
+        Return ranked candidates (best -> worst) for a single anchor date.
+        Uses the exact same union+scoring rules as select_regular_time_series.
+        """
+        if not items:
+            return []
+
+        half = window_days // 2
+        lo = anchor_date - timedelta(days=half)
+        hi = anchor_date + timedelta(days=half)
+
+        infos_all, _, _, aoi_area_value = self._coverage_infos(items, aoi_geom_4326)
+        if not infos_all or aoi_area_value <= 0:
+            return []
+
+        # group by real acquisition timestamp
+        by_dt: Dict[datetime, List[CoverageInfo]] = {}
+        for ci in infos_all:
+            if lo <= ci.acq_date <= hi:
+                by_dt.setdefault(ci.acq_dt, []).append(ci)
+
+        out: List[AnchorCandidate] = []
+        for dt, infos in by_dt.items():
+            chosen = self._best_union_for_timestamp(infos, aoi_area_value)
+            if chosen is None:
+                continue
+
+            cov_frac, chosen_infos = chosen
+            cloud_score = self._union_cloud_score_max(chosen_infos)
+            dist_days = abs((dt.date() - anchor_date).days)
+
+            out.append(
+                AnchorCandidate(
+                    anchor_date=anchor_date,
+                    acq_dt=dt,
+                    items=[ci.item for ci in chosen_infos],
+                    cloud_score=cloud_score,
+                    coverage_frac=cov_frac,
+                    dist_days=dist_days,
+                )
+            )
+
+        out.sort(
+            key=lambda c: (
+                c.cloud_score,          # lower is better
+                -c.coverage_frac,       # higher coverage is better
+                c.dist_days,            # closer is better
+                len(c.items),           # fewer tiles is better
+                c.acq_dt,               # stable
+            )
+        )
+        return out[: max(1, int(top_k))]
+
 
 class TileSelector:
     """
@@ -86,6 +175,85 @@ class TileSelector:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def rank_candidates_for_anchor(
+        self,
+        *,
+        items: Sequence[ItemLike],
+        aoi_geom_4326,
+        anchor_date: date,
+        window_days: int = 21,
+        top_k: int = 5,
+    ) -> List[RankedCandidate]:
+        """
+        Rank the best timestamp-candidates for a SINGLE anchor date.
+
+        Steps:
+          - restrict items to ±window_days//2 around anchor_date (by acquisition date)
+          - group by real acquisition timestamp (acq_dt)
+          - per timestamp: compute best union of tiles (1..max_union_tiles)
+          - score union by max cloud among tiles (cloud_score)
+          - rank by:
+              1) lower cloud_score
+              2) higher coverage_frac
+              3) closer dist_days
+              4) fewer tiles
+        """
+        if not items:
+            return []
+        if window_days <= 0:
+            raise ValueError("window_days must be > 0")
+        if top_k <= 0:
+            return []
+
+        half = window_days // 2
+        lo = anchor_date - timedelta(days=half)
+        hi = anchor_date + timedelta(days=half)
+
+        infos_all, _, _, aoi_area_value = self._coverage_infos(items, aoi_geom_4326)
+        if not infos_all or aoi_area_value <= 0:
+            return []
+
+        # filter to window + group by real acquisition datetime
+        by_dt: Dict[datetime, List[CoverageInfo]] = {}
+        for ci in infos_all:
+            if lo <= ci.acq_date <= hi:
+                by_dt.setdefault(ci.acq_dt, []).append(ci)
+
+        ranked: List[RankedCandidate] = []
+
+        for dt, infos in by_dt.items():
+            chosen = self._best_union_for_timestamp(infos, aoi_area_value)
+            if chosen is None:
+                continue
+
+            cov_frac, chosen_infos = chosen
+            cloud_score = self._union_cloud_score_max(chosen_infos)
+            dist_days = abs((dt.date() - anchor_date).days)
+
+            ranked.append(
+                RankedCandidate(
+                    anchor_date=anchor_date,
+                    acq_dt=dt,
+                    items=[ci.item for ci in chosen_infos],
+                    cloud_score=cloud_score,
+                    coverage_frac=cov_frac,
+                    dist_days=dist_days,
+                )
+            )
+
+        ranked.sort(
+            key=lambda c: (
+                float(c.cloud_score),
+                -float(c.coverage_frac),
+                int(c.dist_days),
+                len(c.items),
+            )
+        )
+
+        return ranked[:top_k]
+
+
     def select_regular_time_series(
         self,
         items: Sequence[ItemLike],

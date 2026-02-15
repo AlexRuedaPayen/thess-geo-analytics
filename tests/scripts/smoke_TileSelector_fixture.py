@@ -18,6 +18,7 @@ def _require_cols(df: pd.DataFrame, cols: List[str]) -> None:
     missing = set(cols) - set(df.columns)
     if missing:
         raise SystemExit(f"[ERR] Fixture missing columns: {missing}. Found: {list(df.columns)}")
+    
 
 
 def _fixture_to_itemlikes(df: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -137,6 +138,55 @@ def main() -> None:
             f"  anchor={s.anchor_date} -> acq={s.acq_dt.isoformat()} "
             f"tiles={len(ids)} ids={ids} cloud_score={s.cloud_score:.2f} cov={s.coverage_frac:.3f}"
         )
+
+    print("\n=== Ranking per anchor date (top candidates) ===")
+
+    period_start = date.fromisoformat(args.start)
+    period_end = date.fromisoformat(args.end)
+
+    anchors = selector._make_midpoint_anchors(period_start, period_end, args.n)
+
+    for a in anchors:
+        ranked = selector.rank_candidates_for_anchor(
+            items=items,
+            aoi_geom_4326=aoi_shp,
+            anchor_date=a,
+            window_days=args.window,
+            top_k=5,
+        )
+
+        print(f"\n--- anchor={a}  candidates={len(ranked)} ---")
+        if not ranked:
+            continue
+
+        for i, cand in enumerate(ranked, start=1):
+            tile_details = []
+            tile_clouds = []
+
+            for it in cand.items:
+                tid = it.id if hasattr(it, "id") else it.get("id")
+                props = it.properties if hasattr(it, "properties") else it.get("properties", {})
+                cc = props.get("eo:cloud_cover", props.get("cloud_cover", None))
+
+                try:
+                    cc_f = float(cc) if cc is not None else float("inf")
+                except Exception:
+                    cc_f = float("inf")
+
+                tile_details.append(f"{tid} (cloud={cc_f:.2f})")
+                tile_clouds.append(cc_f)
+
+            max_cloud = max(tile_clouds) if tile_clouds else float("inf")
+
+            print(
+                f"#{i} acq={cand.acq_dt.date()} dt={cand.acq_dt.isoformat()} "
+                f"dist={cand.dist_days}d cov={cand.coverage_frac:.3f} "
+                f"cloud_score={cand.cloud_score:.2f} max_cloud={max_cloud:.2f} "
+                f"tiles={len(cand.items)}"
+            )
+            for t in tile_details:
+                print(f"    - {t}")
+
 
     # quick sanity prints
     if selected:
