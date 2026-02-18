@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from thess_geo_analytics.pipelines.ExtrcatAoiPipeline import ExtractAoiPipeline
+from thess_geo_analytics.pipelines.ExtractAoiPipeline import ExtractAoiPipeline
 
 
 def main() -> None:
