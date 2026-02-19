@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, Literal
 
 import pandas as pd
+from tqdm import tqdm  
 
 from thess_geo_analytics.builders.AssetsManifestBuilder import (
     AssetsManifestBuilder,
@@ -19,26 +20,25 @@ SortMode = Literal["as_is", "cloud_then_time", "time"]
 
 @dataclass(frozen=True)
 class BuildAssetsManifestParams:
-    # selection scope (applies on scenes_selected.csv)
+    # Selection scope (applies on scenes_selected.csv)
     max_scenes: Optional[int] = None
     date_start: Optional[str] = None  # "YYYY-MM-DD"
     date_end: Optional[str] = None    # "YYYY-MM-DD"
     sort_mode: SortMode = "as_is"
 
-    # downloading
-    download_n: int = 3
-    download_missing: bool = True
-    validate_rasterio: bool = True
+    # Downloading
+    download_n: int = 3                 # how many rows to actually download
+    download_missing: bool = True       # whether to trigger download at all
+    validate_rasterio: bool = True      # open with rasterio after download
 
-    # output naming
+    # Output naming
     out_name: str = "assets_manifest_selected.csv"
 
 
 class BuildAssetsManifestPipeline:
     def __init__(self, builder: AssetsManifestBuilder | None = None) -> None:
         self.builder = builder or AssetsManifestBuilder()
-
-        # downloader created lazily only if needed
+        # Downloader created lazily only if needed
         self._downloader: Optional[CdseAssetDownloader] = None
 
     def run(self, params: BuildAssetsManifestParams) -> Path:
@@ -61,12 +61,12 @@ class BuildAssetsManifestPipeline:
         out_path = RepoPaths.table(params.out_name)
         manifest_df.to_csv(out_path, index=False)
 
-        print(f"[OK] Assets manifest exported => {out_path}")
+        print(f"[OK] Assets manifest exported → {out_path}")
         print(f"[OK] Scenes in manifest: {len(manifest_df)}")
 
         missing_hrefs = manifest_df[["href_b04", "href_b08", "href_scl"]].isna().any(axis=1).sum()
         if missing_hrefs:
-            print(f"[WARN] {missing_hrefs} rows have missing hrefs (resolver mismatch)")
+            print(f"[WARN] {missing_hrefs} row(s) have missing hrefs (resolver mismatch)")
 
         if params.download_missing:
             self._download_and_validate(
@@ -88,8 +88,13 @@ class BuildAssetsManifestPipeline:
 
         downloader = self._get_downloader()
         n = min(int(download_n), len(df))
+        if n <= 0:
+            print("[INFO] download_n <= 0 or empty manifest — skipping downloads.")
+            return
 
-        for i in range(n):
+        print(f"[INFO] Download+validate for first {n} scene(s)…")
+
+        for i in tqdm(range(n), desc="Downloading S2 assets", unit="scene"):
             row = df.iloc[i]
             scene_id = row["scene_id"]
 
@@ -102,19 +107,19 @@ class BuildAssetsManifestPipeline:
             p_scl = Path(row["local_scl"])
 
             if not p_b04.exists():
-                print(f"[DL] {scene_id} -> B04.tif")
+                print(f"[DL] {scene_id} → B04.tif")
                 downloader.download(str(row["href_b04"]), p_b04)
             if not p_b08.exists():
-                print(f"[DL] {scene_id} -> B08.tif")
+                print(f"[DL] {scene_id} → B08.tif")
                 downloader.download(str(row["href_b08"]), p_b08)
             if not p_scl.exists():
-                print(f"[DL] {scene_id} -> SCL.tif")
+                print(f"[DL] {scene_id} → SCL.tif")
                 downloader.download(str(row["href_scl"]), p_scl)
 
             if validate:
                 for p in (p_b04, p_b08, p_scl):
                     with rasterio.open(p) as ds:
-                        _ = (ds.width, ds.height, ds.crs)
+                        _ = (ds.width, ds.height, ds.crs)  # simple sanity check
 
         print(f"[OK] Download+validate done for first {n} scene(s).")
 

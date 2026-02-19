@@ -1,5 +1,7 @@
 # thess-geo-analytics
 
+## Robust Data Cleaning and Fault-Tolerant NDVI Processing for Thessaloniki–Halkidiki
+
 ### Environement Setup
 
 This project requries Python 3.11
