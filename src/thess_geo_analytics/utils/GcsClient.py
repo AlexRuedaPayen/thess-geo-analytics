@@ -28,23 +28,37 @@ class GcsClient:
         if self.credentials:
             self._client = storage.Client.from_service_account_json(self.credentials)
         else:
-            # Use default credentials (e.g. on GCP VM)
             self._client = storage.Client()
-
         self._bucket = self._client.bucket(self.bucket)
 
     # ------------------------
     # Uploads
     # ------------------------
-    def upload(self, local_path: str | Path, remote_path: str) -> str:
+    def upload(
+        self,
+        local_path: str | Path,
+        remote_path: str,
+        timeout: float = 600.0,          # allow slower uploads
+        chunk_mb: int = 5,               # smaller chunks so writes are quicker
+    ) -> str:
         local_path = Path(local_path)
         blob = self._bucket.blob(remote_path)
-        blob.upload_from_filename(str(local_path))
+
+        # 5 MB chunks → less likely to hit write timeouts on slow links
+        blob.chunk_size = chunk_mb * 1024 * 1024
+
+        blob.upload_from_filename(str(local_path), timeout=timeout)
         return f"gs://{self.bucket}/{remote_path}"
 
-    def upload_bytes(self, data: bytes, remote_path: str, content_type: str | None = None) -> str:
+    def upload_bytes(
+        self,
+        data: bytes,
+        remote_path: str,
+        content_type: str | None = None,
+        timeout: float = 600.0,
+    ) -> str:
         blob = self._bucket.blob(remote_path)
-        blob.upload_from_string(data, content_type=content_type)
+        blob.upload_from_string(data, content_type=content_type, timeout=timeout)
         return f"gs://{self.bucket}/{remote_path}"
 
     # ------------------------

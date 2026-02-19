@@ -41,6 +41,7 @@ def main() -> None:
     #   9) gcs_prefix (optional, default "raw_s2")
     #  10) gcs_credentials (optional path or "None" for default auth)
     #  11) delete_local_after_upload (optional: 0/1, default 0)
+    #  12) raw_storage_mode  validate value in {"url_to_local", "url_to_gcs_keep_local", "url_to_gcs_drop_local", "gcs_to_local"}
 
     max_scenes = int(sys.argv[1]) if len(sys.argv) > 1 else None
     download_n = int(sys.argv[2]) if len(sys.argv) > 2 else 3
@@ -54,6 +55,7 @@ def main() -> None:
     gcs_prefix = str(sys.argv[9]) if len(sys.argv) > 9 and sys.argv[9] != "None" else "raw_s2"
     gcs_credentials = str(sys.argv[10]) if len(sys.argv) > 10 and sys.argv[10] != "None" else None
     delete_local_after_upload = _as_bool01(sys.argv[11]) if len(sys.argv) > 11 else False
+    raw_storage_mode = str(sys.argv[12]) if len(sys.argv) > 12 else "url_to_local"
 
     if sort_mode not in {"as_is", "cloud_then_time", "time"}:
         raise SystemExit("sort_mode must be one of: as_is | cloud_then_time | time")
@@ -74,6 +76,7 @@ def main() -> None:
             gcs_prefix=gcs_prefix,
             gcs_credentials=gcs_credentials,
             delete_local_after_upload=delete_local_after_upload,
+            raw_storage_mode=raw_storage_mode,
         )
     )
 

@@ -27,6 +27,27 @@ class BuildNdviMonthlyCompositeParams:
     min_scenes_per_month: int = 2
     fallback_to_quarterly: bool = True
 
+    # ------------------------
+    # RAW STORAGE (input side)
+    # ------------------------
+    # Same modes as RawAssetStorageManager:
+    #   - "url_to_local"
+    #   - "url_to_gcs_keep_local"
+    #   - "url_to_gcs_drop_local"
+    #   - "gcs_to_local"
+    raw_storage_mode: str = "url_to_local"
+
+    # Shared GCS config (for raw + composites)
+    gcs_bucket: Optional[str] = None
+    gcs_credentials: Optional[str] = None
+    gcs_prefix_raw: str = "raw_s2"
+
+    # ------------------------
+    # COMPOSITE STORAGE (output side)
+    # ------------------------
+    upload_composites_to_gcs: bool = False
+    gcs_prefix_composites: str = "ndvi/composites"
+
 
 class BuildNdviMonthlyCompositePipeline:
     """
@@ -44,8 +65,15 @@ class BuildNdviMonthlyCompositePipeline:
             download_missing=params.download_missing,
             min_scenes_per_month=params.min_scenes_per_month,
             fallback_to_quarterly=params.fallback_to_quarterly,
+            # raw storage / GCS
+            raw_storage_mode=params.raw_storage_mode,          # type: ignore[arg-type]
+            gcs_bucket=params.gcs_bucket,
+            gcs_credentials=params.gcs_credentials,
+            gcs_prefix_raw=params.gcs_prefix_raw,
+            # composite uploads
+            upload_composites_to_gcs=params.upload_composites_to_gcs,
+            gcs_prefix_composites=params.gcs_prefix_composites,
         )
-
 
         builder = MonthlyCompositeBuilder(
             aoi_path=params.aoi_path,

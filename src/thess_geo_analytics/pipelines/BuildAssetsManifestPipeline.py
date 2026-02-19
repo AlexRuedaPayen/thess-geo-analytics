@@ -47,6 +47,8 @@ class BuildAssetsManifestParams:
     gcs_credentials: Optional[str] = None
     delete_local_after_upload: bool = False
 
+    raw_storage_mode: RawStorageMode = "url_to_local"
+
 
 class BuildAssetsManifestPipeline:
     def __init__(self, builder: AssetsManifestBuilder | None = None) -> None:
@@ -138,13 +140,12 @@ class BuildAssetsManifestPipeline:
             return df
 
         # Decide storage mode from params
-        if params.upload_to_gcs:
-            if params.delete_local_after_upload:
-                storage_mode: RawStorageMode = "url_to_gcs_drop_local"
-            else:
-                storage_mode = "url_to_gcs_keep_local"
-        else:
-            storage_mode = "url_to_local"
+        storage_mode = params.raw_storage_mode
+
+        # If user set upload_to_gcs=True but still left raw_storage_mode at url_to_local,
+        # default to url_to_gcs_keep_local for convenience:
+        if params.upload_to_gcs and storage_mode == "url_to_local":
+            storage_mode = "url_to_gcs_keep_local"
 
         storage_mgr = RawAssetStorageManager(
             mode=storage_mode,
@@ -169,10 +170,16 @@ class BuildAssetsManifestPipeline:
             p_b08 = Path(row["local_b08"])
             p_scl = Path(row["local_scl"])
 
-            # Existing GCS URLs (if we have them)
-            gcs_b04 = row["gcs_b04"] if "gcs_b04" in df.columns else None
-            gcs_b08 = row["gcs_b08"] if "gcs_b08" in df.columns else None
-            gcs_scl = row["gcs_scl"] if "gcs_scl" in df.columns else None
+            # Existing GCS URLs (if we have them); treat NaN as None
+            def _norm_gcs(v):
+                if v is None or (isinstance(v, float) and pd.isna(v)):
+                    return None
+                v = str(v).strip()
+                return v or None
+
+            gcs_b04 = _norm_gcs(row["gcs_b04"]) if "gcs_b04" in df.columns else None
+            gcs_b08 = _norm_gcs(row["gcs_b08"]) if "gcs_b08" in df.columns else None
+            gcs_scl = _norm_gcs(row["gcs_scl"]) if "gcs_scl" in df.columns else None
 
             # 1) Ensure local B04
             ok_b04, new_gcs_b04 = storage_mgr.ensure_local(

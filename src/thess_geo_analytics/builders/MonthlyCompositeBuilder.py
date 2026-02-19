@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple, Iterable
+from typing import Optional, List, Dict, Tuple
 
 import numpy as np
 import pandas as pd
 import rasterio
 from rasterio.warp import reproject
 from rasterio.enums import Resampling
+from tqdm import tqdm
 
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
 from thess_geo_analytics.geo.CloudMasker import CloudMasker
@@ -17,34 +18,62 @@ from thess_geo_analytics.geo.AoiTargetGrid import AoiTargetGrid
 
 from thess_geo_analytics.services.CdseAssetDownloader import CdseAssetDownloader
 from thess_geo_analytics.services.CdseTokenService import CdseTokenService
+from thess_geo_analytics.services.RawAssetStorageManager import (
+    RawAssetStorageManager,
+    StorageMode as RawStorageMode,
+)
+from thess_geo_analytics.utils.GcsClient import GcsClient
 
 
 @dataclass(frozen=True)
 class MonthlyCompositeConfig:
+    # NDVI / compositing
     nodata: float = -9999.0
     max_scenes: Optional[int] = None
     composite_method: str = "median"
     verbose: bool = False
-    download_missing: bool = True
+
+    # Raw asset downloading (from CDSE / GCS)
+    download_missing: bool = True  # if False, never try to fetch missing raw bands
 
     # density policy
     min_scenes_per_month: int = 2
     fallback_to_quarterly: bool = True
+
+    # ------------- RAW ASSET STORAGE (INPUT) -----------------
+    # How raw B04/B08/SCL are obtained & stored:
+    #   - "url_to_local":         use href_* URLs (CDSE) -> local only
+    #   - "url_to_gcs_keep_local": CDSE -> local + GCS (keep local)
+    #   - "url_to_gcs_drop_local": CDSE -> local + GCS, then delete local
+    #   - "gcs_to_local":          ignore URLs, use gcs_* to restore local from GCS
+    raw_storage_mode: RawStorageMode = "url_to_local"
+
+    # Shared GCS config (raw + composites)
+    gcs_bucket: Optional[str] = None
+    gcs_credentials: Optional[str] = None
+
+    # Where raw bands live in GCS (if used)
+    gcs_prefix_raw: str = "raw_s2"
+
+    # ------------- OUTPUT STORAGE (COMPOSITES) -----------------
+    # Whether to upload NDVI composites (GeoTIFF + preview PNG) to GCS
+    upload_composites_to_gcs: bool = False
+    gcs_prefix_composites: str = "ndvi/composites"  # e.g. ndvi/composites/<aoi_id>/ndvi_YYYY-MM_*.tif
 
 
 class MonthlyCompositeBuilder:
     """
     Produces AOI-wide NDVI composites using:
       - time_serie.csv (anchor_date -> scene_id(s))
-      - assets_manifest_selected.csv (scene_id -> local paths + hrefs)
+      - assets_manifest_selected.csv (scene_id -> local paths + hrefs + optional gcs_*)
 
-    Output labels:
-      - monthly:   YYYY-MM
-      - quarterly: YYYY-Qn
+    Raw assets (B04/B08/SCL) can be sourced from:
+      - local/CDSE (url_to_*) or
+      - GCS (gcs_to_local)
 
-    Outputs per label:
-      outputs/cogs/ndvi_<LABEL>_<aoi_id>.tif
-      outputs/figures/ndvi_<LABEL>_preview.png
+    Outputs:
+      - Local GeoTIFF + PNG
+      - Optional GCS upload for composites
     """
 
     def __init__(
@@ -70,24 +99,27 @@ class MonthlyCompositeBuilder:
         self.downloader = CdseAssetDownloader(self.token_service)
 
         self._target = None  # lazy AOI target grid
+        self._gcs_client: Optional[GcsClient] = None
+        self._storage_mgr: Optional[RawAssetStorageManager] = None
 
     # -----------------------
     # Public API
     # -----------------------
     def run_all_months(self) -> list[tuple[Path, Path]]:
-        """
-        Backward compatible: build composites for every month found in time_serie.csv.
-        (No fallback logic; use run_all_periods() for month->quarter fallback.)
-        """
         ts = self._load_time_serie()
         df_assets = self._load_assets_manifest()
 
         months = sorted(ts["anchor_month"].unique())
         outs: list[tuple[Path, Path]] = []
-        for m in months:
+
+        for m in tqdm(months, desc="NDVI monthly composites", unit="cog"):
             month_ts = ts[ts["anchor_month"] == m].copy()
-            outs.append(self._run_period(label=m, ts_subset=month_ts, df_assets=df_assets))
+            out_tif, out_png = self._run_period(label=m, ts_subset=month_ts, df_assets=df_assets)
+            outs.append((out_tif, out_png))
+
         return outs
+
+
 
     def run_all_periods(self) -> list[tuple[str, Path, Path]]:
         """
@@ -99,23 +131,19 @@ class MonthlyCompositeBuilder:
         ts = self._load_time_serie()
         df_assets = self._load_assets_manifest()
 
-        # count unique scenes per month
-
-    
-
+        # Count unique scenes per month
         month_counts = ts.groupby("anchor_month")["id"].nunique().sort_index()
         good_months = set(month_counts[month_counts >= self.cfg.min_scenes_per_month].index)
         all_months = list(month_counts.index)
 
-        outs: list[tuple[str, Path, Path]] = []
+        # Build list of (label, ts_subset) = each final composite we will produce
+        jobs: list[tuple[str, pd.DataFrame]] = []
 
-        # 1) build good months
+        # 1) good monthly composites
         for m in all_months:
-            if m not in good_months:
-                continue
-            month_ts = ts[ts["anchor_month"] == m].copy()
-            out_tif, out_png = self._run_period(label=m, ts_subset=month_ts, df_assets=df_assets)
-            outs.append((m, out_tif, out_png))
+            if m in good_months:
+                month_ts = ts[ts["anchor_month"] == m].copy()
+                jobs.append((m, month_ts))
 
         # 2) fallback quarters for sparse months
         if self.cfg.fallback_to_quarterly:
@@ -126,10 +154,17 @@ class MonthlyCompositeBuilder:
                 q_ts = ts[ts["anchor_quarter"] == q].copy()
                 if q_ts.empty:
                     continue
-                out_tif, out_png = self._run_period(label=q, ts_subset=q_ts, df_assets=df_assets)
-                outs.append((q, out_tif, out_png))
+                jobs.append((q, q_ts))
+
+        outs: list[tuple[str, Path, Path]] = []
+
+        # Single tqdm bar: 1 tick per final COG
+        for label, ts_subset in tqdm(jobs, desc="NDVI composites", unit="cog"):
+            out_tif, out_png = self._run_period(label=label, ts_subset=ts_subset, df_assets=df_assets)
+            outs.append((label, out_tif, out_png))
 
         return outs
+
 
     def run_month(self, month: str) -> tuple[Path, Path]:
         ts = self._load_time_serie()
@@ -200,17 +235,18 @@ class MonthlyCompositeBuilder:
         for row in rows:
             sid = str(row["scene_id"])
             try:
+                ok_assets = True
                 if self.cfg.download_missing:
-                    self._ensure_assets(row)
+                    ok_assets = self._ensure_assets(row)
 
                 b04_path = Path(row["local_b04"])
                 b08_path = Path(row["local_b08"])
                 scl_path = Path(row["local_scl"])
 
-                if not (b04_path.exists() and b08_path.exists() and scl_path.exists()):
+                if not ok_assets or not (b04_path.exists() and b08_path.exists() and scl_path.exists()):
                     skipped += 1
                     if self.cfg.verbose:
-                        print(f"[WARN] Missing assets for {sid}, skipping.")
+                        print(f"[WARN] Missing or unavailable assets for {sid}, skipping.")
                     continue
 
                 # --- NDVI in native grid ---
@@ -266,6 +302,7 @@ class MonthlyCompositeBuilder:
                 if self.cfg.verbose:
                     print(f"[WARN] Skipping {sid} → {e}")
 
+
         if processed == 0:
             raise RuntimeError(f"No scenes processed successfully for period={label} (skipped={skipped}).")
 
@@ -292,9 +329,13 @@ class MonthlyCompositeBuilder:
         self._write_geotiff(out_tif, composite, out_profile)
         self._write_preview_png(out_png, composite)
 
-        print(f"[OK] period={label} scenes_used={processed} skipped={skipped}")
-        print(f"[OK] Written:  {out_tif}")
-        print(f"[OK] Preview:  {out_png}")
+        # Optional: upload outputs to GCS
+        self._upload_outputs_if_needed(label, out_tif, out_png)
+
+        if self.cfg.verbose:
+            print(f"[OK] period={label} scenes_used={processed} skipped={skipped}")
+            print(f"[OK] Written:  {out_tif}")
+            print(f"[OK] Preview:  {out_png}")
 
         return out_tif, out_png
 
@@ -304,8 +345,6 @@ class MonthlyCompositeBuilder:
     def _load_time_serie(self) -> pd.DataFrame:
         if not self.time_serie_csv.exists():
             raise FileNotFoundError(f"Missing time serie file: {self.time_serie_csv}")
-        
-        
 
         ts = pd.read_csv(self.time_serie_csv)
 
@@ -323,7 +362,6 @@ class MonthlyCompositeBuilder:
         if "scene_id" not in ts.columns and "scene_ids" in ts.columns:
             # take first id for counting; extraction will handle full list
             ts["scene_id"] = ts["scene_ids"].astype(str).str.split("|").str[0]
-
 
         return ts
 
@@ -345,11 +383,10 @@ class MonthlyCompositeBuilder:
         if missing:
             raise ValueError(f"assets manifest missing columns: {sorted(missing)}")
 
+        # gcs_* columns are optional; used for gcs_to_local or url_to_gcs_* modes
         return df
 
     def _extract_scene_ids(self, ts_subset: pd.DataFrame) -> List[str]:
-
-
         if "id" in ts_subset.columns:
             s = ts_subset["id"].dropna().astype(str).tolist()
             return [x for x in s if x.strip()]
@@ -391,22 +428,106 @@ class MonthlyCompositeBuilder:
         return self._target
 
     # -----------------------
-    # Assets + writing
+    # GCS / raw storage
     # -----------------------
-    def _ensure_assets(self, row: Dict[str, str]) -> None:
-        scene_id = str(row["scene_id"])
-        for href_key, local_key in [
-            ("href_b04", "local_b04"),
-            ("href_b08", "local_b08"),
-            ("href_scl", "local_scl"),
-        ]:
-            href = row[href_key]
-            local = Path(row[local_key])
-            local.parent.mkdir(parents=True, exist_ok=True)
+    def _get_gcs_client(self) -> GcsClient:
+        if self._gcs_client is None:
+            if not self.cfg.gcs_bucket:
+                raise ValueError(
+                    "GCS access requested (raw_storage_mode or upload_composites_to_gcs) "
+                    "but cfg.gcs_bucket is not set."
+                )
+            self._gcs_client = GcsClient(
+                bucket=self.cfg.gcs_bucket,
+                credentials=self.cfg.gcs_credentials,
+            )
+        return self._gcs_client
 
-            if not local.exists():
-                print(f"[DL] {scene_id} → {local.name}")
-                self.downloader.download(href, local)
+    def _get_storage_manager(self) -> RawAssetStorageManager:
+        if self._storage_mgr is None:
+            mode = self.cfg.raw_storage_mode
+
+            # GCS client only needed if mode uses GCS
+            if mode in {"url_to_gcs_keep_local", "url_to_gcs_drop_local", "gcs_to_local"}:
+                gcs = self._get_gcs_client()
+            else:
+                gcs = None
+
+            self._storage_mgr = RawAssetStorageManager(
+                mode=mode,
+                downloader=self.downloader,
+                gcs_client=gcs,
+                gcs_prefix=self.cfg.gcs_prefix_raw,
+            )
+        return self._storage_mgr
+
+    def _ensure_assets(self, row: Dict[str, str]) -> bool:
+        """
+        Ensure B04, B08, SCL exist locally according to the chosen raw_storage_mode.
+        Returns True if all three are available locally (even temporarily).
+        """
+        storage_mgr = self._get_storage_manager()
+        scene_id = str(row["scene_id"])
+
+        p_b04 = Path(row["local_b04"])
+        p_b08 = Path(row["local_b08"])
+        p_scl = Path(row["local_scl"])
+
+        gcs_b04 = row.get("gcs_b04")
+        gcs_b08 = row.get("gcs_b08")
+        gcs_scl = row.get("gcs_scl")
+
+        ok_b04, _ = storage_mgr.ensure_local(
+            url=str(row["href_b04"]) if "href_b04" in row else None,
+            local_path=p_b04,
+            scene_id=scene_id,
+            band="B04",
+            gcs_url=gcs_b04,
+        )
+        ok_b08, _ = storage_mgr.ensure_local(
+            url=str(row["href_b08"]) if "href_b08" in row else None,
+            local_path=p_b08,
+            scene_id=scene_id,
+            band="B08",
+            gcs_url=gcs_b08,
+        )
+        ok_scl, _ = storage_mgr.ensure_local(
+            url=str(row["href_scl"]) if "href_scl" in row else None,
+            local_path=p_scl,
+            scene_id=scene_id,
+            band="SCL",
+            gcs_url=gcs_scl,
+        )
+
+        return ok_b04 and ok_b08 and ok_scl
+
+    # -----------------------
+    # Outputs (local + optional GCS)
+    # -----------------------
+    def _upload_outputs_if_needed(self, label: str, out_tif: Path, out_png: Path) -> None:
+        if not self.cfg.upload_composites_to_gcs:
+            return
+
+        try:
+            gcs = self._get_gcs_client()
+        except Exception as e:
+            if self.cfg.verbose:
+                print(f"[WARN] Cannot upload composites to GCS (config issue): {e}")
+            return
+
+        base_prefix = f"{self.cfg.gcs_prefix_composites}/{self.aoi_id}"
+        remote_tif = f"{base_prefix}/ndvi_{label}_{self.aoi_id}.tif"
+        remote_png = f"{base_prefix}/ndvi_{label}_{self.aoi_id}_preview.png"
+
+        try:
+            url_tif = gcs.upload(out_tif, remote_tif)
+            url_png = gcs.upload(out_png, remote_png)
+            if self.cfg.verbose:
+                print(f"[OK] GCS composite GeoTIFF → {url_tif}")
+                print(f"[OK] GCS composite PNG     → {url_png}")
+        except Exception as e:
+            if self.cfg.verbose:
+                print(f"[WARN] Failed to upload composites for {label} to GCS → {e}")
 
     def _write_geotiff(self, path: Path, arr: np.ndarray, profile: dict) -> None:
         out = np.where(np.isnan(arr), profile["nodata"], arr)

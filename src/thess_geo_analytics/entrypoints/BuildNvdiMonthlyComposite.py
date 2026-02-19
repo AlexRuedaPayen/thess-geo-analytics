@@ -39,8 +39,55 @@ def main() -> None:
     p.add_argument("--max-scenes", type=int, default=None, help="Max scenes used per period (month/quarter).")
     p.add_argument("--min-scenes-per-month", type=int, default=2, help="If month has fewer, fallback to quarter.")
     p.add_argument("--no-quarter-fallback", action="store_true", help="Disable quarterly fallback.")
-    p.add_argument("--no-download", action="store_true", help="Do NOT download missing assets.")
+    p.add_argument("--no-download", action="store_true", help="Do NOT fetch missing raw assets (CDSE/GCS).")
     p.add_argument("--verbose", action="store_true")
+
+    # --------------------------
+    # RAW STORAGE MODE (input)
+    # --------------------------
+    p.add_argument(
+        "--raw-storage-mode",
+        default="url_to_local",
+        choices=["url_to_local", "url_to_gcs_keep_local", "url_to_gcs_drop_local", "gcs_to_local"],
+        help=(
+            "How to get/store raw bands (B04/B08/SCL): "
+            "url_to_local (CDSE→local), "
+            "url_to_gcs_keep_local (CDSE→local+GCS), "
+            "url_to_gcs_drop_local (CDSE→local+GCS then delete local), "
+            "gcs_to_local (rehydrate from gcs_* URLs only)."
+        ),
+    )
+
+    # Shared GCS config (raw + composites)
+    p.add_argument(
+        "--gcs-bucket",
+        default=None,
+        help="GCS bucket name (required if raw-storage-mode uses GCS or if --upload-composites-to-gcs).",
+    )
+    p.add_argument(
+        "--gcs-credentials",
+        default=None,
+        help="Path to GCP service account JSON (optional if using instance default credentials).",
+    )
+    p.add_argument(
+        "--gcs-prefix-raw",
+        default="raw_s2",
+        help="Prefix in GCS for raw bands (default: raw_s2).",
+    )
+
+    # --------------------------
+    # COMPOSITE OUTPUT STORAGE
+    # --------------------------
+    p.add_argument(
+        "--upload-composites-to-gcs",
+        action="store_true",
+        help="If set, upload NDVI composites (GeoTIFF+PNG) to GCS.",
+    )
+    p.add_argument(
+        "--gcs-prefix-composites",
+        default="ndvi/composites",
+        help="Prefix in GCS for NDVI composites (default: ndvi/composites).",
+    )
 
     args = p.parse_args()
 
@@ -60,6 +107,14 @@ def main() -> None:
             verbose=args.verbose,
             min_scenes_per_month=args.min_scenes_per_month,
             fallback_to_quarterly=not args.no_quarter_fallback,
+            # raw storage / GCS
+            raw_storage_mode=args.raw_storage_mode,
+            gcs_bucket=args.gcs_bucket,
+            gcs_credentials=args.gcs_credentials,
+            gcs_prefix_raw=args.gcs_prefix_raw,
+            # composite uploads
+            upload_composites_to_gcs=args.upload_composites_to_gcs,
+            gcs_prefix_composites=args.gcs_prefix_composites,
         )
     )
 
