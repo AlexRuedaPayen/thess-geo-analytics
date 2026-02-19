@@ -89,7 +89,7 @@ class GcsClient:
     # Smoke Test
     # ------------------------
     @staticmethod
-    def smoke_test(bucket: str, credentials: Optional[str] = "~/.gcp/thess-geo-analytics-nvdi.json") -> None:
+    def smoke_test(bucket: str, credentials: Optional[str]) -> None:
         """
         Minimal integration smoke test.
 
@@ -135,13 +135,16 @@ class GcsClient:
             print("[OK] Download round-trip verified")
 
             # Cleanup
+
             client.delete(remote_path)
             print("[OK] Cleanup successful")
 
         print("GcsClient smoke test OK")
 
 if __name__ == "__main__":
+
+    credentials_=r"C:\Users\alexr\.gcp\thess-geo-analytics-nvdi.json"
     GcsClient.smoke_test(
-        bucket="ndvi-thess-bucket",
-        credentials="~/.gcp/thess-geo-analytics-nvdi.json"
+        bucket="thess-geo-analytics",
+        credentials=credentials_ ##put your credential's location
     )
