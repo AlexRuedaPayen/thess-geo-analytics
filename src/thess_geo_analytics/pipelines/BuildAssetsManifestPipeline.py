@@ -11,6 +11,11 @@ from thess_geo_analytics.builders.AssetsManifestBuilder import (
     AssetsManifestBuilder,
     AssetsManifestBuildParams,
 )
+from thess_geo_analytics.services.RawAssetStorageManager import (
+    RawAssetStorageManager,
+    StorageMode as RawStorageMode,
+)
+
 from thess_geo_analytics.services.CdseTokenService import CdseTokenService
 from thess_geo_analytics.services.CdseAssetDownloader import CdseAssetDownloader
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
@@ -132,81 +137,101 @@ class BuildAssetsManifestPipeline:
             print("[INFO] download_n <= 0 or empty manifest — skipping downloads.")
             return df
 
-        print(f"[INFO] Download+validate for first {n} scene(s)…")
+        # Decide storage mode from params
+        if params.upload_to_gcs:
+            if params.delete_local_after_upload:
+                storage_mode: RawStorageMode = "url_to_gcs_drop_local"
+            else:
+                storage_mode = "url_to_gcs_keep_local"
+        else:
+            storage_mode = "url_to_local"
+
+        storage_mgr = RawAssetStorageManager(
+            mode=storage_mode,
+            downloader=downloader,
+            gcs_client=gcs,
+            gcs_prefix=params.gcs_prefix,
+        )
+
+        print(f"[INFO] Download+validate for first {n} scene(s)… (mode={storage_mode})")
 
         for i in tqdm(range(n), desc="Downloading S2 assets", unit="scene"):
             row = df.iloc[i]
             scene_id = row["scene_id"]
 
-            # Skip rows with missing hrefs
-            if pd.isna(row["href_b04"]) or pd.isna(row["href_b08"]) or pd.isna(row["href_scl"]):
-                print(f"[SKIP] {scene_id} missing href(s)")
-                continue
+            # Skip rows with missing hrefs if we're in URL-based modes
+            if storage_mode.startswith("url_to_"):
+                if pd.isna(row["href_b04"]) or pd.isna(row["href_b08"]) or pd.isna(row["href_scl"]):
+                    print(f"[SKIP] {scene_id} missing href(s)")
+                    continue
 
             p_b04 = Path(row["local_b04"])
             p_b08 = Path(row["local_b08"])
             p_scl = Path(row["local_scl"])
 
-            # Download if missing; CdseAssetDownloader itself should avoid re-downloading
-            try:
-                if not p_b04.exists():
-                    #print(f"[DL] {scene_id} → B04.tif")
-                    downloader.download(str(row["href_b04"]), p_b04)
-                if not p_b08.exists():
-                    #print(f"[DL] {scene_id} → B08.tif")
-                    downloader.download(str(row["href_b08"]), p_b08)
-                if not p_scl.exists():
-                    #print(f"[DL] {scene_id} → SCL.tif")
-                    downloader.download(str(row["href_scl"]), p_scl)
-            except Exception as e:
-                # Only fatal if the very first download fails (handled inside downloader);
-                # here we treat any raised exception as fatal for the whole run.
-                print(f"[ERROR] Fatal error downloading {scene_id}: {e}")
-                raise
+            # Existing GCS URLs (if we have them)
+            gcs_b04 = row["gcs_b04"] if "gcs_b04" in df.columns else None
+            gcs_b08 = row["gcs_b08"] if "gcs_b08" in df.columns else None
+            gcs_scl = row["gcs_scl"] if "gcs_scl" in df.columns else None
 
-            # If validation requested but some files still missing, skip this scene
+            # 1) Ensure local B04
+            ok_b04, new_gcs_b04 = storage_mgr.ensure_local(
+                url=str(row["href_b04"]) if "href_b04" in row and not pd.isna(row["href_b04"]) else None,
+                local_path=p_b04,
+                scene_id=scene_id,
+                band="B04",
+                gcs_url=gcs_b04,
+            )
+
+            # 2) Ensure local B08
+            ok_b08, new_gcs_b08 = storage_mgr.ensure_local(
+                url=str(row["href_b08"]) if "href_b08" in row and not pd.isna(row["href_b08"]) else None,
+                local_path=p_b08,
+                scene_id=scene_id,
+                band="B08",
+                gcs_url=gcs_b08,
+            )
+
+            # 3) Ensure local SCL
+            ok_scl, new_gcs_scl = storage_mgr.ensure_local(
+                url=str(row["href_scl"]) if "href_scl" in row and not pd.isna(row["href_scl"]) else None,
+                local_path=p_scl,
+                scene_id=scene_id,
+                band="SCL",
+                gcs_url=gcs_scl,
+            )
+
+            # Update manifest with any new GCS URLs
+            if new_gcs_b04 is not None:
+                df.at[row.name, "gcs_b04"] = new_gcs_b04
+            if new_gcs_b08 is not None:
+                df.at[row.name, "gcs_b08"] = new_gcs_b08
+            if new_gcs_scl is not None:
+                df.at[row.name, "gcs_scl"] = new_gcs_scl
+
+            # If validation requested but some bands are missing/unavailable, skip this scene
             if params.validate_rasterio:
-                if not (p_b04.exists() and p_b08.exists() and p_scl.exists()):
-                    print(f"[WARN] {scene_id} missing one or more local files after download — skipping validation.")
-                else:
-                    try:
-                        for p in (p_b04, p_b08, p_scl):
-                            with rasterio.open(p) as ds:
-                                _ = (ds.width, ds.height, ds.crs)
-                    except Exception as e:
-                        print(f"[WARN] Validation failed for {scene_id} ({e}) — skipping this scene.")
-                        # We do NOT raise; continue with next scene
+                if not (ok_b04 and ok_b08 and ok_scl):
+                    print(f"[WARN] {scene_id} missing or failed bands after storage step — skipping validation.")
+                    continue
 
-            # Optional GCS upload (only if all three files exist)
-            if gcs is not None and p_b04.exists() and p_b08.exists() and p_scl.exists():
-                base_prefix = f"{params.gcs_prefix}/{scene_id}"
-                remote_b04 = f"{base_prefix}/B04.tif"
-                remote_b08 = f"{base_prefix}/B08.tif"
-                remote_scl = f"{base_prefix}/SCL.tif"
+                # In drop_local mode, local files may have been removed,
+                # so only validate if the paths still exist.
+                if not (p_b04.exists() and p_b08.exists() and p_scl.exists()):
+                    print(f"[WARN] {scene_id} local files not present for validation — skipping validation.")
+                    continue
 
                 try:
-                    url_b04 = gcs.upload(p_b04, remote_b04)
-                    url_b08 = gcs.upload(p_b08, remote_b08)
-                    url_scl = gcs.upload(p_scl, remote_scl)
-
-                    df.at[row.name, "gcs_b04"] = url_b04
-                    df.at[row.name, "gcs_b08"] = url_b08
-                    df.at[row.name, "gcs_scl"] = url_scl
-
-                    print(f"[OK] GCS upload {scene_id} B04 → {url_b04}")
-                    print(f"[OK] GCS upload {scene_id} B08 → {url_b08}")
-                    print(f"[OK] GCS upload {scene_id} SCL → {url_scl}")
-
-                    if params.delete_local_after_upload:
-                        for p in (p_b04, p_b08, p_scl):
-                            if p.exists():
-                                p.unlink()
-                        print(f"[INFO] Deleted local copies for {scene_id} after successful GCS upload.")
+                    for p in (p_b04, p_b08, p_scl):
+                        with rasterio.open(p) as ds:
+                            _ = (ds.width, ds.height, ds.crs)
                 except Exception as e:
-                    print(f"[WARN] GCS upload failed for {scene_id} ({e}) — keeping local files.")
+                    print(f"[WARN] Validation failed for {scene_id} ({e}) — skipping this scene.")
+                    # We do NOT raise; continue with next scene
 
         print(f"[OK] Download+validate done for first {n} scene(s).")
         return df
+
 
     # -------------------
     # Smoke test
