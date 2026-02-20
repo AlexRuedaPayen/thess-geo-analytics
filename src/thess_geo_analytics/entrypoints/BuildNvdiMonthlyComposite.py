@@ -8,12 +8,24 @@ from thess_geo_analytics.pipelines.BuildNdviMonthlyCompositePipeline import (
     BuildNdviMonthlyCompositePipeline,
     BuildNdviMonthlyCompositeParams,
 )
+from thess_geo_analytics.services.RawAssetStorageManager import (
+    StorageMode as RawStorageMode,
+)
+
+ALLOWED_RAW_STORAGE_MODES = {
+    "url_to_local",
+    "url_to_gcs_keep_local",
+    "url_to_gcs_drop_local",
+    "gcs_to_local",
+}
 
 
 def main() -> None:
     p = argparse.ArgumentParser(
-        description="Build NDVI composites from time_serie.csv + assets_manifest_selected.csv "
-                    "(monthly with optional quarterly fallback)."
+        description=(
+            "Build NDVI composites from time_serie.csv + assets_manifest_selected.csv "
+            "(monthly with optional quarterly fallback)."
+        )
     )
 
     p.add_argument(
@@ -48,7 +60,7 @@ def main() -> None:
     p.add_argument(
         "--raw-storage-mode",
         default="url_to_local",
-        choices=["url_to_local", "url_to_gcs_keep_local", "url_to_gcs_drop_local", "gcs_to_local"],
+        choices=sorted(ALLOWED_RAW_STORAGE_MODES),
         help=(
             "How to get/store raw bands (B04/B08/SCL): "
             "url_to_local (CDSE→local), "
@@ -91,6 +103,31 @@ def main() -> None:
 
     args = p.parse_args()
 
+    # --------------------------
+    # Validate raw_storage_mode & GCS combo
+    # --------------------------
+    raw_mode: RawStorageMode = args.raw_storage_mode  # type: ignore[assignment]
+
+    uses_gcs_for_raw = raw_mode in {
+        "url_to_gcs_keep_local",
+        "url_to_gcs_drop_local",
+        "gcs_to_local",
+    }
+    uses_gcs_for_output = bool(args.upload_composites_to_gcs)
+
+    if (uses_gcs_for_raw or uses_gcs_for_output) and not args.gcs_bucket:
+        raise SystemExit(
+            "GCS bucket is required when:\n"
+            "  - raw_storage_mode is one of url_to_gcs_keep_local, url_to_gcs_drop_local, gcs_to_local, OR\n"
+            "  - --upload-composites-to-gcs is set.\n"
+            "Please provide --gcs-bucket=<bucket-name>."
+        )
+
+    if args.verbose:
+        print(f"[INFO] raw_storage_mode={raw_mode}")
+        if args.gcs_bucket:
+            print(f"[INFO] GCS bucket={args.gcs_bucket}")
+
     aoi_path = RepoPaths.aoi(args.aoi)
 
     pipe = BuildNdviMonthlyCompositePipeline()
@@ -108,7 +145,7 @@ def main() -> None:
             min_scenes_per_month=args.min_scenes_per_month,
             fallback_to_quarterly=not args.no_quarter_fallback,
             # raw storage / GCS
-            raw_storage_mode=args.raw_storage_mode,
+            raw_storage_mode=raw_mode,
             gcs_bucket=args.gcs_bucket,
             gcs_credentials=args.gcs_credentials,
             gcs_prefix_raw=args.gcs_prefix_raw,

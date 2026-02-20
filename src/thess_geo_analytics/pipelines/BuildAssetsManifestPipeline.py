@@ -140,12 +140,14 @@ class BuildAssetsManifestPipeline:
             return df
 
         # Decide storage mode from params
-        storage_mode = params.raw_storage_mode
+        storage_mode: RawStorageMode = params.raw_storage_mode
 
         # If user set upload_to_gcs=True but still left raw_storage_mode at url_to_local,
         # default to url_to_gcs_keep_local for convenience:
         if params.upload_to_gcs and storage_mode == "url_to_local":
             storage_mode = "url_to_gcs_keep_local"
+
+        print(f"[INFO] Using raw_storage_mode={storage_mode}")
 
         storage_mgr = RawAssetStorageManager(
             mode=storage_mode,
@@ -238,7 +240,6 @@ class BuildAssetsManifestPipeline:
 
         print(f"[OK] Download+validate done for first {n} scene(s).")
         return df
-
 
     # -------------------
     # Smoke test

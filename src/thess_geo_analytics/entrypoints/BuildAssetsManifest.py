@@ -20,6 +20,15 @@ def _as_bool01(x: str) -> bool:
     raise ValueError(f"Expected boolean 0/1 or true/false, got: {x}")
 
 
+# Allowed raw storage modes for CLI arg #12
+ALLOWED_RAW_STORAGE_MODES = {
+    "url_to_local",
+    "url_to_gcs_keep_local",
+    "url_to_gcs_drop_local",
+    "gcs_to_local",
+}
+
+
 def main() -> None:
     # Usage examples:
     #   python -m thess_geo_analytics.entrypoints.BuildAssetsManifest
@@ -27,7 +36,7 @@ def main() -> None:
     #   python -m thess_geo_analytics.entrypoints.BuildAssetsManifest 200 10 2020-01-01 2026-02-01 cloud_then_time assets_manifest.csv
     #
     # With GCP options:
-    #   python -m thess_geo_analytics.entrypoints.BuildAssetsManifest 999999 999999 None None as_is assets_manifest_selected.csv 1 thess-geo-analytics raw_s2 C:/Users/alexr/.gcp/thess-geo-analytics-nvdi.json 0
+    #   python -m thess_geo_analytics.entrypoints.BuildAssetsManifest 999999 999999 None None as_is assets_manifest_selected.csv 1 thess-geo-analytics raw_s2 C:/Users/alexr/.gcp/thess-geo-analytics-nvdi.json 0 url_to_gcs_keep_local
     #
     # Args:
     #   1) max_scenes (optional, default None -> all)
@@ -41,7 +50,9 @@ def main() -> None:
     #   9) gcs_prefix (optional, default "raw_s2")
     #  10) gcs_credentials (optional path or "None" for default auth)
     #  11) delete_local_after_upload (optional: 0/1, default 0)
-    #  12) raw_storage_mode  validate value in {"url_to_local", "url_to_gcs_keep_local", "url_to_gcs_drop_local", "gcs_to_local"}
+    #  12) raw_storage_mode (optional, default "url_to_local")
+    #       one of {"url_to_local", "url_to_gcs_keep_local",
+    #               "url_to_gcs_drop_local", "gcs_to_local"}
 
     max_scenes = int(sys.argv[1]) if len(sys.argv) > 1 else None
     download_n = int(sys.argv[2]) if len(sys.argv) > 2 else 3
@@ -60,6 +71,13 @@ def main() -> None:
     if sort_mode not in {"as_is", "cloud_then_time", "time"}:
         raise SystemExit("sort_mode must be one of: as_is | cloud_then_time | time")
 
+    if raw_storage_mode not in ALLOWED_RAW_STORAGE_MODES:
+        raise SystemExit(
+            f"raw_storage_mode must be one of: "
+            f"{', '.join(sorted(ALLOWED_RAW_STORAGE_MODES))} "
+            f"(got: {raw_storage_mode!r})"
+        )
+
     pipe = BuildAssetsManifestPipeline()
     pipe.run(
         BuildAssetsManifestParams(
@@ -76,7 +94,7 @@ def main() -> None:
             gcs_prefix=gcs_prefix,
             gcs_credentials=gcs_credentials,
             delete_local_after_upload=delete_local_after_upload,
-            raw_storage_mode=raw_storage_mode,
+            raw_storage_mode=raw_storage_mode,  # type: ignore[arg-type]
         )
     )
 

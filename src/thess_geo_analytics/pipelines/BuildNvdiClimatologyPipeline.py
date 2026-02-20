@@ -154,8 +154,12 @@ class BuildNdviClimatologyPipeline:
         if mode == "monthly":
             x = clim["month_of_year"]
             ax.set_xlabel("Month of year")
-            ax.set_xticks(range(1, 13))
+
+            # Use the actual months present in the climatology,
+            # not a hard-coded 1..12
+            ax.set_xticks(clim["month_of_year"])
             ax.set_xticklabels(clim["label"])
+
             title = "NDVI climatology (calendar-month baseline)"
         else:
             x = clim["quarter_of_year"]

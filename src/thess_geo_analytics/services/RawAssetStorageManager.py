@@ -172,3 +172,147 @@ class RawAssetStorageManager:
         if len(parts) == 1:
             return ""
         return parts[1]
+
+    # -----------------------
+    # Smoke test for all 4 modes
+    # -----------------------
+    @staticmethod
+    def smoke_test() -> None:
+        """
+        Lightweight integration-like test that exercises the 4 storage modes
+        without hitting real HTTP or GCS.
+
+        - url_to_local
+        - url_to_gcs_keep_local
+        - url_to_gcs_drop_local
+        - gcs_to_local
+        """
+        import tempfile
+
+        print("=== RawAssetStorageManager Smoke Test ===")
+
+        class DummyDownloader:
+            def download(self, href: str, out_path: Path) -> Path:
+                # Just write deterministic bytes
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_bytes(f"dummy-data:{href}".encode("utf-8"))
+                return out_path
+
+        class DummyGcsClient:
+            def __init__(self, bucket: str, base_dir: Path):
+                self.bucket = bucket
+                self._base_dir = base_dir
+                self._base_dir.mkdir(parents=True, exist_ok=True)
+
+            def _obj_path(self, remote_path: str) -> Path:
+                return self._base_dir / remote_path
+
+            def upload(self, local_path: Path, remote_path: str, timeout: float = 600.0, chunk_mb: int = 5) -> str:
+                dst = self._obj_path(remote_path)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(Path(local_path).read_bytes())
+                return f"gs://{self.bucket}/{remote_path}"
+
+            def exists(self, remote_path: str) -> bool:
+                return self._obj_path(remote_path).exists()
+
+            def download(self, remote_path: str, local_path: Path) -> Path:
+                src = self._obj_path(remote_path)
+                if not src.exists():
+                    raise FileNotFoundError(remote_path)
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                local_path.write_bytes(src.read_bytes())
+                return local_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            downloader = DummyDownloader()
+            dummy_gcs = DummyGcsClient(bucket="dummy-bucket", base_dir=tmpdir / "gcs")
+
+            scene_id = "SCENE_001"
+            band = "B04"
+            href = "https://example.com/fake.tif"
+
+            # 1) url_to_local
+            local1 = tmpdir / "local1.tif"
+            mgr1 = RawAssetStorageManager(
+                mode="url_to_local",
+                downloader=downloader,  # type: ignore[arg-type]
+                gcs_client=None,
+                gcs_prefix="raw_s2",
+            )
+            ok1, gcs1 = mgr1.ensure_local(
+                url=href,
+                local_path=local1,
+                scene_id=scene_id,
+                band=band,
+                gcs_url=None,
+            )
+            assert ok1 and local1.exists(), "url_to_local: local file missing"
+            assert gcs1 is None, "url_to_local: should not set gcs_url"
+            print("[OK] url_to_local")
+
+            # 2) url_to_gcs_keep_local
+            local2 = tmpdir / "local2.tif"
+            mgr2 = RawAssetStorageManager(
+                mode="url_to_gcs_keep_local",
+                downloader=downloader,  # type: ignore[arg-type]
+                gcs_client=dummy_gcs,   # type: ignore[arg-type]
+                gcs_prefix="raw_s2",
+            )
+            ok2, gcs2 = mgr2.ensure_local(
+                url=href,
+                local_path=local2,
+                scene_id=scene_id,
+                band=band,
+                gcs_url=None,
+            )
+            assert ok2 and local2.exists(), "url_to_gcs_keep_local: local file missing"
+            assert isinstance(gcs2, str) and gcs2.startswith("gs://"), "url_to_gcs_keep_local: gcs_url not set"
+            print("[OK] url_to_gcs_keep_local")
+
+            # 3) url_to_gcs_drop_local
+            local3 = tmpdir / "local3.tif"
+            mgr3 = RawAssetStorageManager(
+                mode="url_to_gcs_drop_local",
+                downloader=downloader,  # type: ignore[arg-type]
+                gcs_client=dummy_gcs,   # type: ignore[arg-type]
+                gcs_prefix="raw_s2",
+            )
+            ok3, gcs3 = mgr3.ensure_local(
+                url=href,
+                local_path=local3,
+                scene_id=scene_id,
+                band=band,
+                gcs_url=None,
+            )
+            assert ok3, "url_to_gcs_drop_local: ok flag should be True"
+            assert isinstance(gcs3, str) and gcs3.startswith("gs://"), "url_to_gcs_drop_local: gcs_url not set"
+            assert not local3.exists(), "url_to_gcs_drop_local: local file should be removed"
+            print("[OK] url_to_gcs_drop_local")
+
+            # 4) gcs_to_local (restore from existing gcs_url)
+            #    Re-use gcs3 as the stored object; ensure local4 is recreated.
+            local4 = tmpdir / "local4.tif"
+            mgr4 = RawAssetStorageManager(
+                mode="gcs_to_local",
+                downloader=None,
+                gcs_client=dummy_gcs,  # type: ignore[arg-type]
+                gcs_prefix="raw_s2",
+            )
+            ok4, gcs4 = mgr4.ensure_local(
+                url=None,
+                local_path=local4,
+                scene_id=scene_id,
+                band=band,
+                gcs_url=gcs3,
+            )
+            assert ok4 and local4.exists(), "gcs_to_local: local file not restored from GCS"
+            assert gcs4 == gcs3, "gcs_to_local: gcs_url should be preserved"
+            print("[OK] gcs_to_local")
+
+        print("✓ RawAssetStorageManager smoke test OK")
+
+
+if __name__ == "__main__":
+    RawAssetStorageManager.smoke_test()

@@ -9,6 +9,9 @@ from thess_geo_analytics.builders.MonthlyCompositeBuilder import (
     MonthlyCompositeConfig,
 )
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
+from thess_geo_analytics.services.RawAssetStorageManager import (
+    StorageMode as RawStorageMode,
+)
 
 
 @dataclass(frozen=True)
@@ -35,7 +38,7 @@ class BuildNdviMonthlyCompositeParams:
     #   - "url_to_gcs_keep_local"
     #   - "url_to_gcs_drop_local"
     #   - "gcs_to_local"
-    raw_storage_mode: str = "url_to_local"
+    raw_storage_mode: RawStorageMode = "url_to_local"
 
     # Shared GCS config (for raw + composites)
     gcs_bucket: Optional[str] = None
@@ -66,7 +69,7 @@ class BuildNdviMonthlyCompositePipeline:
             min_scenes_per_month=params.min_scenes_per_month,
             fallback_to_quarterly=params.fallback_to_quarterly,
             # raw storage / GCS
-            raw_storage_mode=params.raw_storage_mode,          # type: ignore[arg-type]
+            raw_storage_mode=params.raw_storage_mode,
             gcs_bucket=params.gcs_bucket,
             gcs_credentials=params.gcs_credentials,
             gcs_prefix_raw=params.gcs_prefix_raw,

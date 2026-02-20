@@ -61,6 +61,7 @@ class MonthlyCompositeConfig:
     gcs_prefix_composites: str = "ndvi/composites"  # e.g. ndvi/composites/<aoi_id>/ndvi_YYYY-MM_*.tif
 
 
+
 class MonthlyCompositeBuilder:
     """
     Produces AOI-wide NDVI composites using:
@@ -462,10 +463,6 @@ class MonthlyCompositeBuilder:
         return self._storage_mgr
 
     def _ensure_assets(self, row: Dict[str, str]) -> bool:
-        """
-        Ensure B04, B08, SCL exist locally according to the chosen raw_storage_mode.
-        Returns True if all three are available locally (even temporarily).
-        """
         storage_mgr = self._get_storage_manager()
         scene_id = str(row["scene_id"])
 
