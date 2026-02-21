@@ -27,8 +27,8 @@ class NdviFeatureExtractor:
       F7 = ndvi_skew
     """
 
-    def __init__(self, cfg: PixelFeatureExtractorConfig | None = None):
-        self.cfg = cfg or PixelFeatureExtractorConfig()
+    def __init__(self, cfg: NdviFeatureExtractorConfig | None = None):
+        self.cfg = cfg or NdviFeatureExtractorConfig()
 
     # -------------------------------------------------------------------
     # Public API
