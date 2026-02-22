@@ -1,0 +1,72 @@
+# config/pipeline.thess.yaml
+
+project:
+  name: "thess-geo-analytics"
+
+region:
+  name: "Thessaloniki"
+
+aoi:
+  id: "el522"
+  file: "EL522_Thessaloniki.geojson"   # RepoPaths.aoi(file)
+
+tables:
+  scene_catalog: "scenes_s2_all.csv"
+  scenes_selected: "scenes_selected.csv"
+  assets_manifest: "assets_manifest_selected.csv"
+  ndvi_period_stats: "ndvi_period_stats.csv"
+
+scene_catalog:
+  days: 365
+  cloud_cover_max: 20.0
+  max_items: 5000
+  collection: "sentinel-2-l2a"
+  use_tile_selector: true
+  full_cover_threshold: 0.999
+  allow_union: true
+  n_anchors: 24
+  window_days: 21
+  max_union_tiles: 2
+  out_table: "scenes_s2_all.csv"
+
+assets_manifest:
+  scenes_selected_table: "scenes_selected.csv"
+  out_table: "assets_manifest_selected.csv"
+  max_scenes: null
+  download_n: 3
+  date_start: null
+  date_end: null
+  sort_mode: "as_is"
+  upload_to_gcs: false
+  gcs_bucket: "thess-geo-analytics"
+  gcs_prefix: "raw_s2"
+  delete_local_after_upload: false
+  raw_storage_mode: "url_to_local"
+
+ndvi_monthly_composite:
+  aoi_file: "EL522_Thessaloniki.geojson"
+  aoi_id: "el522"
+  time_serie_table: "scenes_selected.csv"
+  assets_manifest_table: "assets_manifest_selected.csv"
+  max_scenes_per_period: null
+  min_scenes_per_month: 2
+  fallback_to_quarterly: true
+  download_missing: true
+  verbose: false
+  raw_storage_mode: "url_to_local"
+  gcs_bucket: "thess-geo-analytics"
+  gcs_prefix_raw: "raw_s2"
+  upload_composites_to_gcs: false
+  gcs_prefix_composites: "ndvi/composites"
+
+ndvi_period_stats:
+  out_table: "ndvi_period_stats.csv"
+  aoi_id: "el522"
+
+upload:
+  composites:
+    bucket: "thess-geo-analytics"
+    remote_prefix: "ndvi/composites"
+  pixel_features:
+    bucket: "thess-geo-analytics"
+    remote_prefix: "ndvi/pixel_features"
