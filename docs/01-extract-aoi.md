@@ -40,8 +40,7 @@ We will use these variables stored in core.constant
 ```
     GISCO_NUTS_URL,
     HTTP_TIMEOUT,
-    DEFAULT_NUTS_FILENAME,
-
+    DEFAULT_NUTS_FILENAME
 ```
 to target the right  API and store the GISCO file we are interested in (with coordinates e4326). Then we will use these variables from core.parameters
 
@@ -49,7 +48,7 @@ to target the right  API and store the GISCO file we are interested in (with coo
 ```
     DATA_RAW_DIR,
     NUTS_LOCAL_PATH,
-    AUTO_DOWNLOAD_GISCO,
+    AUTO_DOWNLOAD_GISCO
 ---
 
 to store the GISCO data file and the final file where the region has been filtered at the right place.
