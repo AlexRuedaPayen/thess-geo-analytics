@@ -86,6 +86,11 @@ class PipelineConfig:
     @property
     def upload_pixel_features_prefix(self) -> str:
         return self.raw["upload"]["pixel_features"]["remote_prefix"]
+    
+    
+    @property
+    def scene_catalog_params(self) -> Dict[str, Any]:
+        return self.raw["scene_catalog"]
 
 
 def load_pipeline_config(path: Optional[Path] = None) -> PipelineConfig:

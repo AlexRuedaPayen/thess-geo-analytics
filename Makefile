@@ -19,6 +19,21 @@ SCENES_SELECTED_CSV := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) impo
 ASSETS_MANIFEST_CSV := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.assets_manifest_csv)")
 NDVI_PERIOD_STATS_CSV := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.ndvi_period_stats_csv)")
 
+# Scene Catalog parameters from pipeline.thess.yaml
+SC_DAYS := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['days'])")
+SC_CLOUD_MAX := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['cloud_cover_max'])")
+SC_MAX_ITEMS := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['max_items'])")
+SC_COLLECTION := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['collection'])")
+
+# Booleans True/False → 1/0 for CLI
+SC_USE_TILE_SELECTOR := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(1 if p['use_tile_selector'] else 0)")
+SC_ALLOW_UNION := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(1 if p['allow_union'] else 0)")
+
+SC_FULL_COVER_THRESHOLD := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['full_cover_threshold'])")
+SC_N_ANCHORS := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['n_anchors'])")
+SC_WINDOW_DAYS := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['window_days'])")
+SC_MAX_UNION_TILES := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['max_union_tiles'])")
+
 UPLOAD_COMPOSITES_BUCKET := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.upload_composites_bucket)")
 UPLOAD_COMPOSITES_PREFIX := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.upload_composites_prefix)")
 UPLOAD_PIXEL_BUCKET := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.upload_pixel_features_bucket)")
@@ -57,8 +72,20 @@ extract-aoi:
 .PHONY: scene-catalog
 scene-catalog:
 	@echo "[RUN] BuildSceneCatalog for AOI=$(AOI_FILE)"
-	@echo "$(PYTHON) -m thess_geo_analytics.entrypoints.BuildSceneCatalog aoi/$(AOI_FILE)"
-	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildSceneCatalog aoi/$(AOI_FILE)
+	@echo "      days=$(SC_DAYS), cloud_max=$(SC_CLOUD_MAX), max_items=$(SC_MAX_ITEMS)"
+	@echo "      collection=$(SC_COLLECTION), use_tile_selector=$(SC_USE_TILE_SELECTOR), allow_union=$(SC_ALLOW_UNION)"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildSceneCatalog \
+		aoi/$(AOI_FILE) \
+		$(SC_DAYS) \
+		$(SC_CLOUD_MAX) \
+		$(SC_MAX_ITEMS) \
+		$(SC_COLLECTION) \
+		$(SC_USE_TILE_SELECTOR) \
+		$(SC_FULL_COVER_THRESHOLD) \
+		$(SC_ALLOW_UNION) \
+		$(SC_N_ANCHORS) \
+		$(SC_WINDOW_DAYS) \
+		$(SC_MAX_UNION_TILES)
 
 # 3. Build assets manifest
 .PHONY: assets-manifest
