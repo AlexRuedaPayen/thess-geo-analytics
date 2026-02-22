@@ -9,7 +9,8 @@ import yaml
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
 
-CONFIG_PATH = Path("config/pipeline.thess.yaml")
+# Use repo root so this works from anywhere
+CONFIG_PATH = RepoPaths.ROOT / "config" / "pipeline.thess.yaml"
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,7 @@ class PipelineConfig:
 
     @property
     def aoi_path(self) -> Path:
+        # full path to AOI GeoJSON, e.g. aoi/EL522_Thessaloniki.geojson
         return RepoPaths.aoi(self.raw["aoi"]["file"])
 
     # ---- tables ----
@@ -86,11 +88,6 @@ class PipelineConfig:
     @property
     def upload_pixel_features_prefix(self) -> str:
         return self.raw["upload"]["pixel_features"]["remote_prefix"]
-    
-    
-    @property
-    def scene_catalog_params(self) -> Dict[str, Any]:
-        return self.raw["scene_catalog"]
 
 
 def load_pipeline_config(path: Optional[Path] = None) -> PipelineConfig:

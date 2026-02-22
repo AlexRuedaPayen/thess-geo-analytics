@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import sys
+import argparse
 from pathlib import Path
 
 from thess_geo_analytics.pipelines.BuildSceneCatalogPipeline import (
     BuildSceneCatalogPipeline,
     BuildSceneCatalogParams,
 )
+from thess_geo_analytics.core.pipeline_config import load_pipeline_config
 
 
 def _as_bool01(x: str) -> bool:
-    # accept "0/1", "true/false", "yes/no"
     x = x.strip().lower()
     if x in {"1", "true", "yes", "y"}:
         return True
@@ -20,69 +20,101 @@ def _as_bool01(x: str) -> bool:
 
 
 def main() -> None:
-    # Backward compatible usage (old):
-    # python -m thess_geo_analytics.entrypoints.BuildSceneCatalog \
-    #   aoi/EL522_Thessaloniki.geojson 90 20 300 sentinel-2-l2a 1 0.999 1
-    #
-    # New (extended) positional tail:
-    #   ... [n_anchors] [window_days] [allow_union 0|1] [max_union_tiles]
-    #
-    # Args:
-    #   1) aoi_geojson (required)
-    #   2) days (default 365)
-    #   3) cloud_max (default 20.0)
-    #   4) max_items (default 5000)
-    #   5) collection (default DEFAULT_COLLECTION)
-    #   6) use_tile_selector (0/1, default 1)
-    #   7) full_cover_threshold (default 0.999)
-    #   8) allow_union (0/1, default 1)           [NEW meaning, used to be allow_pair]
-    #   9) n_anchors (default 24)
-    #  10) window_days (default 21)
-    #  11) max_union_tiles (default 2)
+    cfg = load_pipeline_config()
+    sc_cfg = cfg.scene_catalog_params
+    aoi_default_path = cfg.aoi_path  # <--- this is important
 
-    if len(sys.argv) < 2:
-        raise SystemExit(
-            "Usage:\n"
-            "  python -m thess_geo_analytics.entrypoints.BuildSceneCatalog "
-            "<aoi_geojson> [days] [cloud_max] [max_items] [collection] "
-            "[use_tile_selector 0|1] [full_cover_threshold] [allow_union 0|1] "
-            "[n_anchors] [window_days] [max_union_tiles]\n\n"
-            "Examples:\n"
-            "  python -m thess_geo_analytics.entrypoints.BuildSceneCatalog aoi/EL522_Thessaloniki.geojson 30 30 100 sentinel-2-l2a 1\n"
-            "  python -m thess_geo_analytics.entrypoints.BuildSceneCatalog aoi/EL522_Thessaloniki.geojson 2190 20 5000 sentinel-2-l2a 1 0.999 1 72 21 2\n"
-        )
+    p = argparse.ArgumentParser(
+        description="Build Sentinel-2 scene catalog (scenes_s2_all.csv + scenes_selected.csv)."
+    )
 
-    aoi_path = Path(sys.argv[1])
+    p.add_argument(
+        "--aoi",
+        default=str(aoi_default_path),
+        help="Path to AOI GeoJSON (default from YAML aoi.file).",
+    )
 
-    days = int(sys.argv[2]) if len(sys.argv) > 2 else 365
-    cloud_max = float(sys.argv[3]) if len(sys.argv) > 3 else 20.0
-    max_items = int(sys.argv[4]) if len(sys.argv) > 4 else 5000
-    collection = str(sys.argv[5]) if len(sys.argv) > 5 else None
+    # Core temporal & quality params
+    p.add_argument(
+        "--days",
+        type=int,
+        default=sc_cfg.get("days", 365),
+        help="Look-back window (days).",
+    )
+    p.add_argument(
+        "--cloud-max",
+        type=float,
+        default=sc_cfg.get("cloud_cover_max", 20.0),
+        help="Maximum allowed cloud cover percentage.",
+    )
+    p.add_argument(
+        "--max-items",
+        type=int,
+        default=sc_cfg.get("max_items", 5000),
+        help="Max STAC items to retrieve.",
+    )
+    p.add_argument(
+        "--collection",
+        default=sc_cfg.get("collection", "sentinel-2-l2a"),
+        help="STAC collection id.",
+    )
 
-    use_tile_selector = _as_bool01(sys.argv[6]) if len(sys.argv) > 6 else True
-    full_cover_threshold = float(sys.argv[7]) if len(sys.argv) > 7 else 0.999
+    # Tile selector / coverage
+    p.add_argument(
+        "--use-tile-selector",
+        default=str(sc_cfg.get("use_tile_selector", True)),
+        help="Whether to apply tile selector (0/1, true/false).",
+    )
+    p.add_argument(
+        "--full-cover-threshold",
+        type=float,
+        default=sc_cfg.get("full_cover_threshold", 0.999),
+        help="AOI coverage threshold for a tile.",
+    )
+    p.add_argument(
+        "--allow-union",
+        default=str(sc_cfg.get("allow_union", True)),
+        help="Allow merging multiple tiles (0/1, true/false).",
+    )
+    p.add_argument(
+        "--n-anchors",
+        type=int,
+        default=sc_cfg.get("n_anchors", 24),
+        help="Number of temporal anchors.",
+    )
+    p.add_argument(
+        "--window-days",
+        type=int,
+        default=sc_cfg.get("window_days", 21),
+        help="Temporal window per anchor (days).",
+    )
+    p.add_argument(
+        "--max-union-tiles",
+        type=int,
+        default=sc_cfg.get("max_union_tiles", 2),
+        help="Maximum number of tiles to union.",
+    )
 
-    # IMPORTANT: this used to be allow_pair in your older version,
-    # but your TileSelector now uses allow_union/max_union_tiles.
-    allow_union = _as_bool01(sys.argv[8]) if len(sys.argv) > 8 else True
+    args = p.parse_args()
 
-    n_anchors = int(sys.argv[9]) if len(sys.argv) > 9 else 24
-    window_days = int(sys.argv[10]) if len(sys.argv) > 10 else 21
-    max_union_tiles = int(sys.argv[11]) if len(sys.argv) > 11 else 2
+    use_tile_selector = _as_bool01(args.use_tile_selector)
+    allow_union = _as_bool01(args.allow_union)
+
+    aoi_path = Path(args.aoi)
 
     pipeline = BuildSceneCatalogPipeline(aoi_path=aoi_path)
 
     params = BuildSceneCatalogParams(
-        days=days,
-        cloud_cover_max=cloud_max,
-        max_items=max_items,
-        collection=collection or BuildSceneCatalogParams().collection,
+        days=args.days,
+        cloud_cover_max=args.cloud_max,
+        max_items=args.max_items,
+        collection=args.collection,
         use_tile_selector=use_tile_selector,
-        full_cover_threshold=full_cover_threshold,
+        full_cover_threshold=args.full_cover_threshold,
         allow_union=allow_union,
-        max_union_tiles=max_union_tiles,
-        n_anchors=n_anchors,
-        window_days=window_days,
+        max_union_tiles=args.max_union_tiles,
+        n_anchors=args.n_anchors,
+        window_days=args.window_days,
     )
 
     out = pipeline.run(params)

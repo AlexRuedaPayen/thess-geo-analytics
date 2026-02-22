@@ -37,18 +37,18 @@ assets_manifest:
   scenes_selected_table: "scenes_selected.csv"
   out_table: "assets_manifest_selected.csv"
 
-  max_scenes: null
-  download_n: 3
-  date_start: null
-  date_end: null
-  sort_mode: "as_is"
+  max_scenes: null              
+  date_start: "2018-01-01"
+  date_end:   "2026-12-31"
+  sort_mode: "cloud_then_time" 
 
-  upload_to_gcs: false
+  download_n: 3                
+  upload_to_gcs: false          
+
   gcs_bucket: "thess-geo-analytics"
   gcs_prefix: "raw_s2"
   delete_local_after_upload: false
   raw_storage_mode: "url_to_local"
-
 # ----------------------------------
 # NDVI Monthly / Quarterly Composites
 # ----------------------------------

@@ -71,27 +71,13 @@ extract-aoi:
 # 2. Build scene catalog
 .PHONY: scene-catalog
 scene-catalog:
-	@echo "[RUN] BuildSceneCatalog for AOI=$(AOI_FILE)"
-	@echo "      days=$(SC_DAYS), cloud_max=$(SC_CLOUD_MAX), max_items=$(SC_MAX_ITEMS)"
-	@echo "      collection=$(SC_COLLECTION), use_tile_selector=$(SC_USE_TILE_SELECTOR), allow_union=$(SC_ALLOW_UNION)"
-	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildSceneCatalog \
-		aoi/$(AOI_FILE) \
-		$(SC_DAYS) \
-		$(SC_CLOUD_MAX) \
-		$(SC_MAX_ITEMS) \
-		$(SC_COLLECTION) \
-		$(SC_USE_TILE_SELECTOR) \
-		$(SC_FULL_COVER_THRESHOLD) \
-		$(SC_ALLOW_UNION) \
-		$(SC_N_ANCHORS) \
-		$(SC_WINDOW_DAYS) \
-		$(SC_MAX_UNION_TILES)
+	@echo "[RUN] BuildSceneCatalog from config (AOI=$(AOI_FILE))"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildSceneCatalog
 
 # 3. Build assets manifest
 .PHONY: assets-manifest
 assets-manifest:
-	@echo "[RUN] BuildAssetsManifest (scenes_selected -> assets_manifest_selected)"
-	# Uses defaults inside the entrypoint (scenes_selected.csv, etc.)
+	@echo "[RUN] BuildAssetsManifest (manifest only, light downloads)"
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildAssetsManifest
 
 # 4. Build NDVI monthly/quarterly composites
@@ -142,5 +128,5 @@ superpixel-features:
 # "Full" for now = only AOI + Scene Catalog
 # ----------
 .PHONY: full
-full: extract-aoi scene-catalog
+full: extract-aoi scene-catalog assets-manifest
 	@echo "✓ AOI extraction + scene catalog completed.
