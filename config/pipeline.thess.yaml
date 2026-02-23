@@ -31,12 +31,12 @@ scene_catalog:
   # No date_start here anymore; use pipeline.date_start in code
 
   cloud_cover_max: 20.0
-  max_items: 400
+  max_items: 3000
   collection: "sentinel-2-l2a"
   use_tile_selector: true
   full_cover_threshold: 0.999
   allow_union: true
-  n_anchors: 24
+  n_anchors: 64
   window_days: 21
   max_union_tiles: 2
   out_table: "scenes_s2_all.csv"
@@ -51,7 +51,7 @@ assets_manifest:
   max_scenes: null
   sort_mode: "cloud_then_time"
 
-  download_n: 10
+  download_n: 64
   upload_to_gcs: false
 
   gcs_bucket: "thess-geo-analytics"
