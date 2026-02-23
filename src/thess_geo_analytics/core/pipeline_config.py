@@ -7,15 +7,24 @@ from typing import Any, Dict, Optional
 import yaml
 
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
+from thess_geo_analytics.core.mode_settings import ModeSettings
 
 
-# Use repo root so this works from anywhere
 CONFIG_PATH = RepoPaths.ROOT / "config" / "pipeline.thess.yaml"
 
 
 @dataclass(frozen=True)
 class PipelineConfig:
     raw: Dict[str, Any]
+
+    # ---- mode ----
+    @property
+    def mode(self) -> str:
+        return ModeSettings.from_raw_config(self.raw).mode
+
+    @property
+    def mode_settings(self) -> ModeSettings:
+        return ModeSettings.from_raw_config(self.raw)
 
     # ---- AOI / region ----
     @property
@@ -28,7 +37,6 @@ class PipelineConfig:
 
     @property
     def aoi_path(self) -> Path:
-        # full path to AOI GeoJSON, e.g. aoi/EL522_Thessaloniki.geojson
         return RepoPaths.aoi(self.raw["aoi"]["file"])
 
     # ---- tables ----
@@ -52,25 +60,35 @@ class PipelineConfig:
         filename = self.raw["tables"]["ndvi_period_stats"]
         return RepoPaths.table(filename)
 
-    # ---- scene catalog params ----
+    # ---- raw params ----
     @property
     def scene_catalog_params(self) -> Dict[str, Any]:
         return self.raw["scene_catalog"]
 
-    # ---- assets manifest params ----
     @property
     def assets_manifest_params(self) -> Dict[str, Any]:
         return self.raw["assets_manifest"]
 
-    # ---- ndvi composite params ----
     @property
     def ndvi_composite_params(self) -> Dict[str, Any]:
         return self.raw["ndvi_monthly_composite"]
 
-    # ---- ndvi period stats ----
     @property
     def ndvi_period_stats_params(self) -> Dict[str, Any]:
         return self.raw["ndvi_period_stats"]
+
+    # ---- effective params (mode-aware) ----
+    @property
+    def effective_scene_catalog_params(self) -> Dict[str, Any]:
+        return self.mode_settings.effective_scene_catalog(self.scene_catalog_params)
+
+    @property
+    def effective_assets_manifest_params(self) -> Dict[str, Any]:
+        return self.mode_settings.effective_assets_manifest(self.assets_manifest_params)
+
+    @property
+    def effective_ndvi_composite_params(self) -> Dict[str, Any]:
+        return self.mode_settings.effective_ndvi_composites(self.ndvi_composite_params)
 
     # ---- upload defaults ----
     @property

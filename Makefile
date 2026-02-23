@@ -14,34 +14,24 @@ AOI_FILE := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pip
 AOI_ID   := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.aoi_id)")
 REGION_NAME := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.region_name)")
 
-SCENE_CATALOG_CSV := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.scene_catalog_csv)")
-SCENES_SELECTED_CSV := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.scenes_selected_csv)")
-ASSETS_MANIFEST_CSV := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.assets_manifest_csv)")
-NDVI_PERIOD_STATS_CSV := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.ndvi_period_stats_csv)")
 
-# Scene Catalog parameters from pipeline.thess.yaml
-SC_DAYS := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['days'])")
-SC_CLOUD_MAX := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['cloud_cover_max'])")
-SC_MAX_ITEMS := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['max_items'])")
-SC_COLLECTION := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['collection'])")
+.PHONY: clean
+clean:
+	@echo "[CLEAN] Removing generated output files..."
+	@rm -f outputs/tables/*.csv 2>/dev/null || true
+	@rm -f outputs/cogs/*.tif 2>/dev/null || true
+	@rm -f outputs/png/*.png 2>/dev/null || true
+	@rm -rf outputs/composites 2>/dev/null || true
+	@echo "[CLEAN] Done."
 
-# Booleans True/False → 1/0 for CLI
-SC_USE_TILE_SELECTOR := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(1 if p['use_tile_selector'] else 0)")
-SC_ALLOW_UNION := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(1 if p['allow_union'] else 0)")
-
-SC_FULL_COVER_THRESHOLD := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['full_cover_threshold'])")
-SC_N_ANCHORS := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['n_anchors'])")
-SC_WINDOW_DAYS := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['window_days'])")
-SC_MAX_UNION_TILES := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); p = cfg.scene_catalog_params; print(p['max_union_tiles'])")
-
-UPLOAD_COMPOSITES_BUCKET := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.upload_composites_bucket)")
-UPLOAD_COMPOSITES_PREFIX := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.upload_composites_prefix)")
-UPLOAD_PIXEL_BUCKET := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.upload_pixel_features_bucket)")
-UPLOAD_PIXEL_PREFIX := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.upload_pixel_features_prefix)")
-
-COGS_DIR ?= outputs/cogs
-PNG_DIR ?= outputs/png
-PIXEL_FEATURES_PATH ?= $(COGS_DIR)/pixel_features_7d.tif
+.PHONY: clean-hard
+clean-hard: clean
+	@echo "[CLEAN HARD] Removing AOI cache, scene cache, raw S2 downloads..."
+	@rm -rf aoi/*.geojson 2>/dev/null || true
+	@rm -rf cache/s2 2>/dev/null || true
+	@rm -rf cache/s2_downloads 2>/dev/null || true
+	@rm -rf cache/nuts 2>/dev/null || true
+	@echo "[CLEAN HARD] All cached data removed."
 
 # ----------
 # Help

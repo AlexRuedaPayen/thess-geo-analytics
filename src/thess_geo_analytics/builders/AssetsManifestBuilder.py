@@ -21,7 +21,7 @@ class AssetsManifestBuildParams:
 
     - If you want "all", keep max_scenes=None.
     - If you want to cap for dev, set max_scenes=10 (etc).
-    - If you want a time slice, set date_start/date_end (YYYY-MM-DD).
+    - If you want a time slice, set date_start (YYYY-MM-DD).
     """
     max_scenes: Optional[int] = None
     collection: str = DEFAULT_COLLECTION
@@ -29,7 +29,6 @@ class AssetsManifestBuildParams:
 
     # optional filtering
     date_start: Optional[str] = None  # "YYYY-MM-DD"
-    date_end: Optional[str] = None    # "YYYY-MM-DD"
 
     # optional ordering
     sort_mode: SortMode = "as_is"
@@ -49,13 +48,25 @@ class AssetsManifestBuilder:
 
     def __init__(
         self,
+        *,
+        band_resolution: int = 10,
         stac: CdseStacService | None = None,
         resolver: StacAssetResolver | None = None,
     ) -> None:
+        """
+        band_resolution:
+          - 10 => prefer B04_10m / B08_10m (deep mode)
+          - 20 => prefer B04_20m / B08_20m (dev mode)
+        """
+        self.band_resolution = int(band_resolution)
         self.stac = stac or CdseStacService()
-        self.resolver = resolver or StacAssetResolver()
+        self.resolver = resolver or StacAssetResolver(
+            band_resolution=self.band_resolution
+        )
 
-    def build_assets_manifest_df(self, scenes_df: pd.DataFrame, params: AssetsManifestBuildParams) -> pd.DataFrame:
+    def build_assets_manifest_df(
+        self, scenes_df: pd.DataFrame, params: AssetsManifestBuildParams
+    ) -> pd.DataFrame:
         missing = self.REQUIRED_SCENES_COLS - set(scenes_df.columns)
         if missing:
             raise ValueError(f"Scenes catalog missing columns: {sorted(missing)}")
@@ -66,25 +77,19 @@ class AssetsManifestBuilder:
         df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce", utc=True)
         df = df.dropna(subset=["datetime"]).reset_index(drop=True)
 
-        # optional date filtering
+        # optional date filtering: only date_start now
         if params.date_start:
             start = pd.to_datetime(params.date_start, utc=True)
             df = df[df["datetime"] >= start]
-        if params.date_end:
-            # treat date_end as inclusive day (end-of-day)
-            end = pd.to_datetime(params.date_end, utc=True) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
-            df = df[df["datetime"] <= end]
 
         if df.empty:
             raise ValueError("No scenes left after datetime parsing / date filtering.")
 
         # optional sorting
         if params.sort_mode == "cloud_then_time":
-            # best quality first
             df = df.sort_values(["cloud_cover", "datetime"], ascending=[True, True])
         elif params.sort_mode == "time":
             df = df.sort_values(["datetime"], ascending=[True])
-        # else "as_is": keep input order (often already time-series order)
 
         # optional cap
         if params.max_scenes is not None:
@@ -116,12 +121,6 @@ class AssetsManifestBuilder:
 
         out = pd.DataFrame(rows)
 
-        # quick sanity / reporting helpers
-        missing_hrefs = out[["href_b04", "href_b08", "href_scl"]].isna().any(axis=1).sum()
-        if missing_hrefs:
-            # keep builder pure, but this is still a useful hint when running a smoke test
-            pass
-
         return out
 
     @staticmethod
@@ -134,7 +133,7 @@ class AssetsManifestBuilder:
             raise FileNotFoundError(f"Missing scenes catalog: {scenes_csv}")
 
         scenes_df = pd.read_csv(scenes_csv)
-        builder = AssetsManifestBuilder()
+        builder = AssetsManifestBuilder(band_resolution=10)
 
         params = AssetsManifestBuildParams(
             max_scenes=5,

@@ -21,7 +21,13 @@ def _as_bool01(x: str) -> bool:
 
 def main() -> None:
     cfg = load_pipeline_config()
+
+    # scene_catalog-specific knobs (cloud_cover_max, max_items, etc.)
     sc_cfg = cfg.scene_catalog_params
+
+    # 🔹 Single global temporal knob, from YAML: pipeline.date_start
+    pipeline_date_start = cfg.raw["pipeline"]["date_start"]
+
     aoi_default_path = cfg.aoi_path  # <--- this is important
 
     p = argparse.ArgumentParser(
@@ -36,10 +42,9 @@ def main() -> None:
 
     # Core temporal & quality params
     p.add_argument(
-        "--days",
-        type=int,
-        default=sc_cfg.get("days", 365),
-        help="Look-back window (days).",
+        "--date-start",
+        default=pipeline_date_start,
+        help="Earliest acquisition date (YYYY-MM-DD, default from pipeline.date_start).",
     )
     p.add_argument(
         "--cloud-max",
@@ -105,7 +110,7 @@ def main() -> None:
     pipeline = BuildSceneCatalogPipeline(aoi_path=aoi_path)
 
     params = BuildSceneCatalogParams(
-        days=args.days,
+        date_start=args.date_start,
         cloud_cover_max=args.cloud_max,
         max_items=args.max_items,
         collection=args.collection,

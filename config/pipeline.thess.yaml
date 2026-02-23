@@ -1,5 +1,15 @@
+mode: "dev"  # allowed: "dev", "deep"
+
 project:
   name: "thess-geo-analytics"
+
+# ----------------------------------
+# Global pipeline controls
+# ----------------------------------
+pipeline:
+  # Single temporal knob used across the pipeline
+  # (BuildSceneCatalog, BuildAssetsManifest, etc.)
+  date_start: "2021-01-01"
 
 region:
   name: "Thessaloniki"
@@ -18,9 +28,10 @@ tables:
 # Scene Catalog (BuildSceneCatalog)
 # ----------------------------------
 scene_catalog:
-  days: 365
+  # No date_start here anymore; use pipeline.date_start in code
+
   cloud_cover_max: 20.0
-  max_items: 5000
+  max_items: 400
   collection: "sentinel-2-l2a"
   use_tile_selector: true
   full_cover_threshold: 0.999
@@ -37,18 +48,19 @@ assets_manifest:
   scenes_selected_table: "scenes_selected.csv"
   out_table: "assets_manifest_selected.csv"
 
-  max_scenes: null              
-  date_start: "2018-01-01"
-  date_end:   "2026-12-31"
-  sort_mode: "cloud_then_time" 
+  max_scenes: null
+  sort_mode: "cloud_then_time"
 
-  download_n: 3                
-  upload_to_gcs: false          
+  download_n: 10
+  upload_to_gcs: false
 
   gcs_bucket: "thess-geo-analytics"
   gcs_prefix: "raw_s2"
   delete_local_after_upload: false
   raw_storage_mode: "url_to_local"
+
+  band_resolution: 10
+
 # ----------------------------------
 # NDVI Monthly / Quarterly Composites
 # ----------------------------------

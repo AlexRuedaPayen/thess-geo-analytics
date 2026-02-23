@@ -29,36 +29,52 @@ def main() -> None:
     """
     Simplified CLI for BuildAssetsManifest.
 
-    Defaults are read from config/pipeline.thess.yaml (assets_manifest section),
+    Defaults are read from config/pipeline.thess.yaml
     and can be overridden via optional flags.
+
+    - Temporal extent comes from pipeline.date_start (single global knob).
+    - Other defaults come from assets_manifest section (possibly mode-adjusted).
     """
     cfg = load_pipeline_config()
-    am_cfg = cfg.assets_manifest_params  # dict from your PipelineConfig
+    ms = cfg.mode_settings
+
+    am_raw = cfg.assets_manifest_params
+    am_cfg = cfg.effective_assets_manifest_params
+
+    # 🔹 global date_start (single source of truth)
+    pipeline_date_start = cfg.raw["pipeline"]["date_start"]
+
+    band_res = ms.effective_band_resolution(am_raw)
+    max_workers_default = ms.effective_max_download_workers()
+
+    print(f"[INFO] Mode: {ms.mode}")
+    print(
+        f"[INFO] AssetsManifest ({ms.mode}) -> "
+        f"date_start={pipeline_date_start}, "
+        f"max_scenes={am_cfg.get('max_scenes')}, "
+        f"download_n={am_cfg.get('download_n')}, "
+        f"band_resolution={band_res} m, upload_to_gcs={am_cfg.get('upload_to_gcs')}"
+    )
 
     p = argparse.ArgumentParser(
         description="Build assets_manifest_selected.csv from scenes_selected.csv"
     )
 
-    # ---- high-value knobs (others from YAML) ----
+    # ---- high-value knobs ----
     p.add_argument(
         "--max-scenes",
         type=int,
         default=am_cfg.get("max_scenes"),
-        help="Max scenes in manifest (default from YAML, None=all).",
+        help="Max scenes in manifest (default from YAML+mode, None=all).",
     )
     p.add_argument(
         "--date-start",
-        default=am_cfg.get("date_start"),
-        help='Start date YYYY-MM-DD (default from YAML).',
-    )
-    p.add_argument(
-        "--date-end",
-        default=am_cfg.get("date_end"),
-        help='End date YYYY-MM-DD (default from YAML).',
+        default=pipeline_date_start,
+        help="Earliest acquisition date YYYY-MM-DD (default from pipeline.date_start).",
     )
     p.add_argument(
         "--sort-mode",
-        default=am_cfg.get("sort_mode", "as_is"),
+        default=am_cfg.get("sort_mode", "cloud_then_time"),
         choices=["as_is", "cloud_then_time", "time"],
         help="Ordering before capping max_scenes.",
     )
@@ -72,6 +88,18 @@ def main() -> None:
         "--no-download",
         action="store_true",
         help="Skip all downloads (manifest only).",
+    )
+    p.add_argument(
+        "--band-resolution",
+        type=int,
+        default=band_res,
+        help="Target NDVI resolution in metres (10 or 20).",
+    )
+    p.add_argument(
+        "--max-download-workers",
+        type=int,
+        default=max_workers_default,
+        help="Max concurrent downloads (default mode-dependent; env THESS_MAX_DOWNLOAD_WORKERS overrides).",
     )
     p.add_argument(
         "--out-name",
@@ -118,7 +146,7 @@ def main() -> None:
     if upload_to_gcs and not args.gcs_bucket:
         raise SystemExit("upload_to_gcs=True but no --gcs-bucket set (nor in YAML).")
 
-    # effective download_n
+    # effective download_n: CLI still wins
     effective_download_n = 0 if args.no_download else args.download_n
 
     pipe = BuildAssetsManifestPipeline()
@@ -126,7 +154,6 @@ def main() -> None:
         BuildAssetsManifestParams(
             max_scenes=args.max_scenes,
             date_start=args.date_start,
-            date_end=args.date_end,
             sort_mode=args.sort_mode,  # type: ignore[arg-type]
             download_n=effective_download_n,
             download_missing=not args.no_download,
@@ -138,6 +165,8 @@ def main() -> None:
             gcs_credentials=args.gcs_credentials,
             delete_local_after_upload=delete_local_after_upload,
             raw_storage_mode=args.raw_storage_mode,  # type: ignore[arg-type]
+            band_resolution=args.band_resolution,
+            max_download_workers=args.max_download_workers,
         )
     )
 

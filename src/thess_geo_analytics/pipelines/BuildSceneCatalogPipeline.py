@@ -15,35 +15,40 @@ from thess_geo_analytics.geo.TileSelector import TileSelector
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
 
+from dataclasses import dataclass
+
 @dataclass(frozen=True)
 class BuildSceneCatalogParams:
-    # STAC query range
-    days: int = 365
+    # Single global temporal knob from pipeline.date_start
+    date_start: str = "2021-01-01"  # overridden by entrypoint from YAML
+
     cloud_cover_max: float = 20.0
     max_items: int = 5000
     collection: str = DEFAULT_COLLECTION
 
-    # Selection
     use_tile_selector: bool = True
-
-    # Regular time series params (your rule)
-    n_anchors: int = 24
-    window_days: int = 21
-
-    # Union / coverage behavior
     full_cover_threshold: float = 0.999
     allow_union: bool = True
     max_union_tiles: int = 2
-
+    n_anchors: int = 24
+    window_days: int = 21
 
 class BuildSceneCatalogPipeline:
     def __init__(self, aoi_path: Path, builder: SceneCatalogBuilder | None = None) -> None:
         self.aoi_path = aoi_path
         self.builder = builder or SceneCatalogBuilder()
 
-    def run(self, params: BuildSceneCatalogParams = BuildSceneCatalogParams()) -> Path:
+
+    def run(self, params: BuildSceneCatalogParams) -> Path:
+        # Use absolute date_start instead of "days ago"
+        try:
+            start = date.fromisoformat(params.date_start)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid date_start={params.date_start!r} (expected YYYY-MM-DD)"
+            ) from e
+
         end = date.today()
-        start = end - timedelta(days=params.days)
 
         stac_params = StacQueryParams(
             collection=params.collection,
@@ -51,14 +56,12 @@ class BuildSceneCatalogPipeline:
             max_items=params.max_items,
         )
 
-        # 1) Query STAC as items (needed for geometry-based selection)
         items, aoi_geom_geojson = self.builder.build_scene_items(
             aoi_path=self.aoi_path,
             date_start=start.isoformat(),
             date_end=end.isoformat(),
             params=stac_params,
         )
-
         RepoPaths.TABLES.mkdir(parents=True, exist_ok=True)
 
         raw_csv = RepoPaths.table("scenes_catalog.csv")

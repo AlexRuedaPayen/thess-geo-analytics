@@ -29,7 +29,6 @@ class BuildAssetsManifestParams:
     # Selection scope (applies on scenes_selected.csv)
     max_scenes: Optional[int] = None
     date_start: Optional[str] = None  # "YYYY-MM-DD"
-    date_end: Optional[str] = None    # "YYYY-MM-DD"
     sort_mode: SortMode = "as_is"
 
     # Downloading
@@ -49,12 +48,14 @@ class BuildAssetsManifestParams:
 
     raw_storage_mode: RawStorageMode = "url_to_local"
 
+    # Mode-aware knobs
+    band_resolution: int = 10
+    max_download_workers: Optional[int] = None
+
 
 class BuildAssetsManifestPipeline:
     def __init__(self, builder: AssetsManifestBuilder | None = None) -> None:
-        self.builder = builder or AssetsManifestBuilder()
-
-        # Created lazily only if needed
+        self._builder_override = builder
         self._downloader: Optional[CdseAssetDownloader] = None
         self._gcs: Optional[GcsClient] = None
 
@@ -71,18 +72,24 @@ class BuildAssetsManifestPipeline:
         build_params = AssetsManifestBuildParams(
             max_scenes=params.max_scenes,
             date_start=params.date_start,
-            date_end=params.date_end,
             sort_mode=params.sort_mode,
         )
 
-        manifest_df = self.builder.build_assets_manifest_df(scenes_df, build_params)
+        builder = self._get_builder(params)
+        manifest_df = builder.build_assets_manifest_df(scenes_df, build_params)
 
         RepoPaths.TABLES.mkdir(parents=True, exist_ok=True)
         out_path = RepoPaths.table(params.out_name)
 
         print(f"[OK] Assets manifest created in memory — rows: {len(manifest_df)}")
+        print(f"[INFO] band_resolution={params.band_resolution} m")
 
-        missing_hrefs = manifest_df[["href_b04", "href_b08", "href_scl"]].isna().any(axis=1).sum()
+        missing_hrefs = (
+            manifest_df[["href_b04", "href_b08", "href_scl"]]
+            .isna()
+            .any(axis=1)
+            .sum()
+        )
         if missing_hrefs:
             print(f"[WARN] {missing_hrefs} row(s) have missing hrefs (resolver mismatch)")
 
@@ -93,7 +100,6 @@ class BuildAssetsManifestPipeline:
                 params=params,
             )
 
-        # Save final manifest (possibly with gcs_* columns added)
         manifest_df.to_csv(out_path, index=False)
         print(f"[OK] Assets manifest exported → {out_path}")
         print(f"[OK] Scenes in manifest: {len(manifest_df)}")
@@ -103,6 +109,14 @@ class BuildAssetsManifestPipeline:
     # -------------------
     # Internals
     # -------------------
+    def _get_builder(self, params: BuildAssetsManifestParams) -> AssetsManifestBuilder:
+        if self._builder_override is not None:
+            return self._builder_override
+
+        return AssetsManifestBuilder(
+            band_resolution=params.band_resolution,
+        )
+
     def _get_downloader(self) -> CdseAssetDownloader:
         if self._downloader is None:
             token = CdseTokenService()
@@ -148,12 +162,15 @@ class BuildAssetsManifestPipeline:
             storage_mode = "url_to_gcs_keep_local"
 
         print(f"[INFO] Using raw_storage_mode={storage_mode}")
+        if params.max_download_workers is not None:
+            print(f"[INFO] max_download_workers={params.max_download_workers}")
 
         storage_mgr = RawAssetStorageManager(
             mode=storage_mode,
             downloader=downloader,
             gcs_client=gcs,
             gcs_prefix=params.gcs_prefix,
+            # max_workers=params.max_download_workers,  # uncomment if supported
         )
 
         print(f"[INFO] Download+validate for first {n} scene(s)… (mode={storage_mode})")
@@ -164,7 +181,11 @@ class BuildAssetsManifestPipeline:
 
             # Skip rows with missing hrefs if we're in URL-based modes
             if storage_mode.startswith("url_to_"):
-                if pd.isna(row["href_b04"]) or pd.isna(row["href_b08"]) or pd.isna(row["href_scl"]):
+                if (
+                    pd.isna(row["href_b04"])
+                    or pd.isna(row["href_b08"])
+                    or pd.isna(row["href_scl"])
+                ):
                     print(f"[SKIP] {scene_id} missing href(s)")
                     continue
 
@@ -185,7 +206,9 @@ class BuildAssetsManifestPipeline:
 
             # 1) Ensure local B04
             ok_b04, new_gcs_b04 = storage_mgr.ensure_local(
-                url=str(row["href_b04"]) if "href_b04" in row and not pd.isna(row["href_b04"]) else None,
+                url=str(row["href_b04"])
+                if "href_b04" in row and not pd.isna(row["href_b04"])
+                else None,
                 local_path=p_b04,
                 scene_id=scene_id,
                 band="B04",
@@ -194,7 +217,9 @@ class BuildAssetsManifestPipeline:
 
             # 2) Ensure local B08
             ok_b08, new_gcs_b08 = storage_mgr.ensure_local(
-                url=str(row["href_b08"]) if "href_b08" in row and not pd.isna(row["href_b08"]) else None,
+                url=str(row["href_b08"])
+                if "href_b08" in row and not pd.isna(row["href_b08"])
+                else None,
                 local_path=p_b08,
                 scene_id=scene_id,
                 band="B08",
@@ -203,13 +228,14 @@ class BuildAssetsManifestPipeline:
 
             # 3) Ensure local SCL
             ok_scl, new_gcs_scl = storage_mgr.ensure_local(
-                url=str(row["href_scl"]) if "href_scl" in row and not pd.isna(row["href_scl"]) else None,
+                url=str(row["href_scl"])
+                if "href_scl" in row and not pd.isna(row["href_scl"])
+                else None,
                 local_path=p_scl,
                 scene_id=scene_id,
                 band="SCL",
                 gcs_url=gcs_scl,
             )
-
             # Update manifest with any new GCS URLs
             if new_gcs_b04 is not None:
                 df.at[row.name, "gcs_b04"] = new_gcs_b04
@@ -221,13 +247,17 @@ class BuildAssetsManifestPipeline:
             # If validation requested but some bands are missing/unavailable, skip this scene
             if params.validate_rasterio:
                 if not (ok_b04 and ok_b08 and ok_scl):
-                    print(f"[WARN] {scene_id} missing or failed bands after storage step — skipping validation.")
+                    print(
+                        f"[WARN] {scene_id} missing or failed bands after storage step — skipping validation."
+                    )
                     continue
 
                 # In drop_local mode, local files may have been removed,
                 # so only validate if the paths still exist.
                 if not (p_b04.exists() and p_b08.exists() and p_scl.exists()):
-                    print(f"[WARN] {scene_id} local files not present for validation — skipping validation.")
+                    print(
+                        f"[WARN] {scene_id} local files not present for validation — skipping validation."
+                    )
                     continue
 
                 try:
@@ -235,8 +265,9 @@ class BuildAssetsManifestPipeline:
                         with rasterio.open(p) as ds:
                             _ = (ds.width, ds.height, ds.crs)
                 except Exception as e:
-                    print(f"[WARN] Validation failed for {scene_id} ({e}) — skipping this scene.")
-                    # We do NOT raise; continue with next scene
+                    print(
+                        f"[WARN] Validation failed for {scene_id} ({e}) — skipping this scene."
+                    )
 
         print(f"[OK] Download+validate done for first {n} scene(s).")
         return df
@@ -254,6 +285,7 @@ class BuildAssetsManifestPipeline:
                 sort_mode="as_is",
                 download_missing=False,  # no downloads in smoke
                 out_name="assets_manifest_selected_smoke.csv",
+                band_resolution=10,
             )
         )
         print("[OK] wrote:", out)
