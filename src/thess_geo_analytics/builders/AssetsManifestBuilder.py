@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Literal
+import json  # <-- NEW
 
 import pandas as pd
 
@@ -41,7 +42,8 @@ class AssetsManifestBuilder:
       href_b04, href_b08, href_scl,
       local_b04, local_b08, local_scl
 
-    No file I/O and no downloads here.
+    No file I/O and no downloads here, except for the STAC item cache
+    (JSON per scene) to avoid repeated network calls across runs.
     """
 
     REQUIRED_SCENES_COLS = {"id", "datetime", "cloud_cover"}
@@ -95,12 +97,44 @@ class AssetsManifestBuilder:
         if params.max_scenes is not None:
             df = df.head(int(params.max_scenes))
 
+        # -------------------------------
+        # STAC item cache initialisation
+        # -------------------------------
+        stac_cache_dir = params.cache_root / "stac_items"
+        stac_cache_dir.mkdir(parents=True, exist_ok=True)
+
         rows: List[dict] = []
 
         for _, r in df.iterrows():
             item_id = str(r["id"])
 
-            item_json = self.stac.fetch_item(params.collection, item_id)
+            # Cache path for this scene's STAC item JSON
+            cache_path = stac_cache_dir / f"{item_id}.json"
+
+            # Try cache first
+            item_json = None
+            if cache_path.exists():
+                try:
+                    with cache_path.open("r", encoding="utf-8") as f:
+                        item_json = json.load(f)
+                    # Optional: you could add a debug print on first hit
+                    # print(f"[STAC CACHE] Hit for {item_id}")
+                except Exception:
+                    # Corrupted cache → ignore and refetch
+                    item_json = None
+
+            # If not in cache or failed to read → fetch from STAC and store
+            if item_json is None:
+                # First run or cache miss: actual network call
+                item_json = self.stac.fetch_item(params.collection, item_id)
+
+                try:
+                    with cache_path.open("w", encoding="utf-8") as f:
+                        json.dump(item_json, f)
+                except Exception:
+                    # Cache write failure should not break the pipeline
+                    pass
+
             hrefs = self.resolver.resolve_b04_b08_scl(item_json)
 
             scene_dir = params.cache_root / item_id
