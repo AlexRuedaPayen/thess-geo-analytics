@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Literal
+from threading import Lock
+import rasterio
 
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -140,8 +142,7 @@ class BuildAssetsManifestPipeline:
         df: pd.DataFrame,
         *,
         params: BuildAssetsManifestParams,
-    ) -> pd.DataFrame:
-        import rasterio
+        ) -> pd.DataFrame:
 
         downloader = self._get_downloader()
         gcs: Optional[GcsClient] = None
@@ -164,11 +165,9 @@ class BuildAssetsManifestPipeline:
             storage_mode = "url_to_gcs_keep_local"
 
         # -------- max_workers resolution --------
-        # Start from params.max_download_workers (mode-aware value)
         max_workers: Optional[int] = params.max_download_workers
 
-        # Env override: ticket spelling THESS_AMX_DOWNLAOD_WORKERS,
-        # plus fallback to THESS_MAX_DOWNLOAD_WORKERS for convenience.
+        # Env override: THESS_AMX_DOWNLAOD_WORKERS (typo kept for backwards compat)
         env_override = os.getenv("THESS_AMX_DOWNLAOD_WORKERS") or os.getenv(
             "THESS_MAX_DOWNLOAD_WORKERS"
         )
@@ -180,7 +179,6 @@ class BuildAssetsManifestPipeline:
                     f"[WARN] Ignoring invalid THESS_AMX_DOWNLAOD_WORKERS={env_override!r}"
                 )
 
-        # Fallback default if still None
         if max_workers is None or max_workers <= 0:
             max_workers = 4
 
@@ -199,6 +197,22 @@ class BuildAssetsManifestPipeline:
             f"(mode={storage_mode}, workers={max_workers})"
         )
 
+        # -------- logging state (thread-safe) --------
+        log_rows: list[dict] = []
+        log_lock = Lock()
+
+        def _log(scene_id: str, status: str, *, ok_b04=None, ok_b08=None, ok_scl=None, message: str = ""):
+            row = {
+                "scene_id": scene_id,
+                "status": status,
+                "ok_b04": ok_b04,
+                "ok_b08": ok_b08,
+                "ok_scl": ok_scl,
+                "message": message,
+            }
+            with log_lock:
+                log_rows.append(row)
+
         # Helper: normalise GCS URL values
         def _norm_gcs(v):
             if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -211,90 +225,161 @@ class BuildAssetsManifestPipeline:
             row = df.iloc[idx]
             scene_id = row["scene_id"]
 
-            # Skip rows with missing hrefs if we're in URL-based modes
-            if storage_mode.startswith("url_to_"):
-                if (
-                    pd.isna(row["href_b04"])
-                    or pd.isna(row["href_b08"])
-                    or pd.isna(row["href_scl"])
-                ):
-                    print(f"[SKIP] {scene_id} missing href(s)")
-                    return
+            try:
+                # Skip rows with missing hrefs if we're in URL-based modes
+                if storage_mode.startswith("url_to_"):
+                    if (
+                        pd.isna(row["href_b04"])
+                        or pd.isna(row["href_b08"])
+                        or pd.isna(row["href_scl"])
+                    ):
+                        msg = "missing one or more hrefs; skipping download"
+                        print(f"[SKIP] {scene_id}: {msg}")
+                        _log(
+                            scene_id,
+                            status="skipped_missing_href",
+                            ok_b04=False,
+                            ok_b08=False,
+                            ok_scl=False,
+                            message=msg,
+                        )
+                        return
 
-            p_b04 = Path(row["local_b04"])
-            p_b08 = Path(row["local_b08"])
-            p_scl = Path(row["local_scl"])
+                p_b04 = Path(row["local_b04"])
+                p_b08 = Path(row["local_b08"])
+                p_scl = Path(row["local_scl"])
 
-            # Existing GCS URLs (if we have them); treat NaN as None
-            gcs_b04 = _norm_gcs(row["gcs_b04"]) if "gcs_b04" in df.columns else None
-            gcs_b08 = _norm_gcs(row["gcs_b08"]) if "gcs_b08" in df.columns else None
-            gcs_scl = _norm_gcs(row["gcs_scl"]) if "gcs_scl" in df.columns else None
+                # Existing GCS URLs (if we have them); treat NaN as None
+                gcs_b04 = _norm_gcs(row["gcs_b04"]) if "gcs_b04" in df.columns else None
+                gcs_b08 = _norm_gcs(row["gcs_b08"]) if "gcs_b08" in df.columns else None
+                gcs_scl = _norm_gcs(row["gcs_scl"]) if "gcs_scl" in df.columns else None
 
-            # 1) Ensure local B04
-            ok_b04, new_gcs_b04 = storage_mgr.ensure_local(
-                url=str(row["href_b04"])
-                if "href_b04" in row and not pd.isna(row["href_b04"])
-                else None,
-                local_path=p_b04,
-                scene_id=scene_id,
-                band="B04",
-                gcs_url=gcs_b04,
-            )
+                # 1) Ensure local B04
+                ok_b04, new_gcs_b04 = storage_mgr.ensure_local(
+                    url=str(row["href_b04"])
+                    if "href_b04" in row and not pd.isna(row["href_b04"])
+                    else None,
+                    local_path=p_b04,
+                    scene_id=scene_id,
+                    band="B04",
+                    gcs_url=gcs_b04,
+                )
 
-            # 2) Ensure local B08
-            ok_b08, new_gcs_b08 = storage_mgr.ensure_local(
-                url=str(row["href_b08"])
-                if "href_b08" in row and not pd.isna(row["href_b08"])
-                else None,
-                local_path=p_b08,
-                scene_id=scene_id,
-                band="B08",
-                gcs_url=gcs_b08,
-            )
+                # 2) Ensure local B08
+                ok_b08, new_gcs_b08 = storage_mgr.ensure_local(
+                    url=str(row["href_b08"])
+                    if "href_b08" in row and not pd.isna(row["href_b08"])
+                    else None,
+                    local_path=p_b08,
+                    scene_id=scene_id,
+                    band="B08",
+                    gcs_url=gcs_b08,
+                )
 
-            # 3) Ensure local SCL
-            ok_scl, new_gcs_scl = storage_mgr.ensure_local(
-                url=str(row["href_scl"])
-                if "href_scl" in row and not pd.isna(row["href_scl"])
-                else None,
-                local_path=p_scl,
-                scene_id=scene_id,
-                band="SCL",
-                gcs_url=gcs_scl,
-            )
+                # 3) Ensure local SCL
+                ok_scl, new_gcs_scl = storage_mgr.ensure_local(
+                    url=str(row["href_scl"])
+                    if "href_scl" in row and not pd.isna(row["href_scl"])
+                    else None,
+                    local_path=p_scl,
+                    scene_id=scene_id,
+                    band="SCL",
+                    gcs_url=gcs_scl,
+                )
 
-            # Update manifest with any new GCS URLs
-            if new_gcs_b04 is not None:
-                df.at[row.name, "gcs_b04"] = new_gcs_b04
-            if new_gcs_b08 is not None:
-                df.at[row.name, "gcs_b08"] = new_gcs_b08
-            if new_gcs_scl is not None:
-                df.at[row.name, "gcs_scl"] = new_gcs_scl
+                # Update manifest with any new GCS URLs
+                if new_gcs_b04 is not None:
+                    df.at[row.name, "gcs_b04"] = new_gcs_b04
+                if new_gcs_b08 is not None:
+                    df.at[row.name, "gcs_b08"] = new_gcs_b08
+                if new_gcs_scl is not None:
+                    df.at[row.name, "gcs_scl"] = new_gcs_scl
 
-            # If validation requested but some bands are missing/unavailable, skip this scene
-            if params.validate_rasterio:
-                if not (ok_b04 and ok_b08 and ok_scl):
-                    print(
-                        f"[WARN] {scene_id} missing or failed bands after storage step — skipping validation."
+                all_ok = bool(ok_b04 and ok_b08 and ok_scl)
+
+                # If validation requested but some bands are missing/unavailable, skip this scene
+                if params.validate_rasterio:
+                    if not all_ok:
+                        msg = "one or more bands missing/failed after storage step — skipping validation"
+                        print(f"[WARN] {scene_id}: {msg}")
+                        _log(
+                            scene_id,
+                            status="download_incomplete",
+                            ok_b04=bool(ok_b04),
+                            ok_b08=bool(ok_b08),
+                            ok_scl=bool(ok_scl),
+                            message=msg,
+                        )
+                        return
+
+                    # In drop_local mode, local files may have been removed,
+                    # so only validate if the paths still exist.
+                    if not (p_b04.exists() and p_b08.exists() and p_scl.exists()):
+                        msg = "local files not present for validation — skipping validation"
+                        print(f"[WARN] {scene_id}: {msg}")
+                        _log(
+                            scene_id,
+                            status="skipped_no_local_for_validation",
+                            ok_b04=bool(ok_b04),
+                            ok_b08=bool(ok_b08),
+                            ok_scl=bool(ok_scl),
+                            message=msg,
+                        )
+                        return
+
+                    try:
+                        for p in (p_b04, p_b08, p_scl):
+                            with rasterio.open(p) as ds:
+                                _ = (ds.width, ds.height, ds.crs)
+                    except Exception as e:
+                        msg = f"validation failed: {e}"
+                        print(f"[WARN] {scene_id}: {msg}")
+                        _log(
+                            scene_id,
+                            status="validation_failed",
+                            ok_b04=bool(ok_b04),
+                            ok_b08=bool(ok_b08),
+                            ok_scl=bool(ok_scl),
+                            message=msg,
+                        )
+                        return
+
+                    # If we got here, everything is fine (download + validation)
+                    _log(
+                        scene_id,
+                        status="success",
+                        ok_b04=True,
+                        ok_b08=True,
+                        ok_scl=True,
+                        message="downloaded and validated",
                     )
-                    return
-
-                # In drop_local mode, local files may have been removed,
-                # so only validate if the paths still exist.
-                if not (p_b04.exists() and p_b08.exists() and p_scl.exists()):
-                    print(
-                        f"[WARN] {scene_id} local files not present for validation — skipping validation."
+                else:
+                    # No validation: log based on download result only
+                    status = "success" if all_ok else "download_incomplete"
+                    msg = "downloaded (no validation)" if all_ok else "one or more bands failed download"
+                    if not all_ok:
+                        print(f"[WARN] {scene_id}: {msg}")
+                    _log(
+                        scene_id,
+                        status=status,
+                        ok_b04=bool(ok_b04),
+                        ok_b08=bool(ok_b08),
+                        ok_scl=bool(ok_scl),
+                        message=msg,
                     )
-                    return
 
-                try:
-                    for p in (p_b04, p_b08, p_scl):
-                        with rasterio.open(p) as ds:
-                            _ = (ds.width, ds.height, ds.crs)
-                except Exception as e:
-                    print(
-                        f"[WARN] Validation failed for {scene_id} ({e}) — skipping this scene."
-                    )
+            except Exception as e:
+                # Catch anything unexpected so one scene can't kill the pool
+                msg = f"unexpected error: {e}"
+                print(f"[WARN] {scene_id}: {msg}")
+                _log(
+                    scene_id,
+                    status="exception",
+                    ok_b04=False,
+                    ok_b08=False,
+                    ok_scl=False,
+                    message=msg,
+                )
 
         # -------- parallel execution with completion-based progress bar --------
         indices = list(range(n))
@@ -302,17 +387,39 @@ class BuildAssetsManifestPipeline:
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = [ex.submit(_process_scene, idx) for idx in indices]
 
-            # tqdm over *completed* tasks
             for fut in tqdm(
                 as_completed(futures),
                 total=len(futures),
                 desc="Downloading S2 assets",
                 unit="scene",
             ):
-                # Propagate any exceptions from worker threads
-                fut.result()
+                try:
+                    # Any remaining uncaught errors (should be rare)
+                    fut.result()
+                except Exception as e:
+                    print(f"[WARN] Worker raised unhandled exception: {e}")
 
         print(f"[OK] Download+validate done for first {n} scene(s).")
+
+        # -------- write per-scene download status CSV --------
+        if log_rows:
+            log_df = pd.DataFrame(log_rows)
+        else:
+            log_df = pd.DataFrame(
+                columns=["scene_id", "status", "ok_b04", "ok_b08", "ok_scl", "message"]
+            )
+
+        log_csv = RepoPaths.table("assets_download_status.csv")
+        log_df.to_csv(log_csv, index=False)
+
+        # Small summary
+        if not log_df.empty:
+            status_counts = log_df["status"].value_counts().to_dict()
+            print(f"[OK] Download status log exported → {log_csv}")
+            print("[INFO] Download status counts:", status_counts)
+        else:
+            print(f"[OK] No scenes processed; empty status log → {log_csv}")
+
         return df
 
     # -------------------
