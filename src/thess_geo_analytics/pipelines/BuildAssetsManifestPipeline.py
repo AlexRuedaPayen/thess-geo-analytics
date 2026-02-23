@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Literal
 
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 from tqdm import tqdm
 
@@ -161,22 +163,52 @@ class BuildAssetsManifestPipeline:
         if params.upload_to_gcs and storage_mode == "url_to_local":
             storage_mode = "url_to_gcs_keep_local"
 
+        # -------- max_workers resolution --------
+        # Start from params.max_download_workers (mode-aware value)
+        max_workers: Optional[int] = params.max_download_workers
+
+        # Env override: ticket spelling THESS_AMX_DOWNLAOD_WORKERS,
+        # plus fallback to THESS_MAX_DOWNLOAD_WORKERS for convenience.
+        env_override = os.getenv("THESS_AMX_DOWNLAOD_WORKERS") or os.getenv(
+            "THESS_MAX_DOWNLOAD_WORKERS"
+        )
+        if env_override:
+            try:
+                max_workers = max(1, int(env_override))
+            except ValueError:
+                print(
+                    f"[WARN] Ignoring invalid THESS_AMX_DOWNLAOD_WORKERS={env_override!r}"
+                )
+
+        # Fallback default if still None
+        if max_workers is None or max_workers <= 0:
+            max_workers = 4
+
         print(f"[INFO] Using raw_storage_mode={storage_mode}")
-        if params.max_download_workers is not None:
-            print(f"[INFO] max_download_workers={params.max_download_workers}")
+        print(f"[INFO] max_download_workers={max_workers}")
 
         storage_mgr = RawAssetStorageManager(
             mode=storage_mode,
             downloader=downloader,
             gcs_client=gcs,
             gcs_prefix=params.gcs_prefix,
-            # max_workers=params.max_download_workers,  # uncomment if supported
         )
 
-        print(f"[INFO] Download+validate for first {n} scene(s)… (mode={storage_mode})")
+        print(
+            f"[INFO] Download+validate for first {n} scene(s)… "
+            f"(mode={storage_mode}, workers={max_workers})"
+        )
 
-        for i in tqdm(range(n), desc="Downloading S2 assets", unit="scene"):
-            row = df.iloc[i]
+        # Helper: normalise GCS URL values
+        def _norm_gcs(v):
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return None
+            v = str(v).strip()
+            return v or None
+
+        # -------- per-scene worker --------
+        def _process_scene(idx: int) -> None:
+            row = df.iloc[idx]
             scene_id = row["scene_id"]
 
             # Skip rows with missing hrefs if we're in URL-based modes
@@ -187,19 +219,13 @@ class BuildAssetsManifestPipeline:
                     or pd.isna(row["href_scl"])
                 ):
                     print(f"[SKIP] {scene_id} missing href(s)")
-                    continue
+                    return
 
             p_b04 = Path(row["local_b04"])
             p_b08 = Path(row["local_b08"])
             p_scl = Path(row["local_scl"])
 
             # Existing GCS URLs (if we have them); treat NaN as None
-            def _norm_gcs(v):
-                if v is None or (isinstance(v, float) and pd.isna(v)):
-                    return None
-                v = str(v).strip()
-                return v or None
-
             gcs_b04 = _norm_gcs(row["gcs_b04"]) if "gcs_b04" in df.columns else None
             gcs_b08 = _norm_gcs(row["gcs_b08"]) if "gcs_b08" in df.columns else None
             gcs_scl = _norm_gcs(row["gcs_scl"]) if "gcs_scl" in df.columns else None
@@ -236,6 +262,7 @@ class BuildAssetsManifestPipeline:
                 band="SCL",
                 gcs_url=gcs_scl,
             )
+
             # Update manifest with any new GCS URLs
             if new_gcs_b04 is not None:
                 df.at[row.name, "gcs_b04"] = new_gcs_b04
@@ -250,7 +277,7 @@ class BuildAssetsManifestPipeline:
                     print(
                         f"[WARN] {scene_id} missing or failed bands after storage step — skipping validation."
                     )
-                    continue
+                    return
 
                 # In drop_local mode, local files may have been removed,
                 # so only validate if the paths still exist.
@@ -258,7 +285,7 @@ class BuildAssetsManifestPipeline:
                     print(
                         f"[WARN] {scene_id} local files not present for validation — skipping validation."
                     )
-                    continue
+                    return
 
                 try:
                     for p in (p_b04, p_b08, p_scl):
@@ -268,6 +295,22 @@ class BuildAssetsManifestPipeline:
                     print(
                         f"[WARN] Validation failed for {scene_id} ({e}) — skipping this scene."
                     )
+
+        # -------- parallel execution with completion-based progress bar --------
+        indices = list(range(n))
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = [ex.submit(_process_scene, idx) for idx in indices]
+
+            # tqdm over *completed* tasks
+            for fut in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Downloading S2 assets",
+                unit="scene",
+            ):
+                # Propagate any exceptions from worker threads
+                fut.result()
 
         print(f"[OK] Download+validate done for first {n} scene(s).")
         return df

@@ -138,7 +138,6 @@ class ModeSettings:
         max_scenes = am.get("max_scenes")
         if isinstance(max_scenes, int):
             am["max_scenes"] = min(max_scenes, MAX_SCENES_DEV)
-        # if None, leave as None – “keep all logically” as you requested
 
         # ---- download_n ----
         DOWNLOAD_N_DEV = 300 # <----that's 100 GiB of data whihc is a symbolic cap
