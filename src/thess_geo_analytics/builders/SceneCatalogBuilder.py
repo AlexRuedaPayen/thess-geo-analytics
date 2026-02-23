@@ -12,12 +12,18 @@ from thess_geo_analytics.services.CdseSceneCatalogService import CdseSceneCatalo
 
 class SceneCatalogBuilder:
     """
-    Builds scene catalogs by querying STAC.
+    Builds scene catalogs by querying STAC and converting TileSelector outputs
+    into tabular CSVs.
 
-    - build_scene_items(): raw STAC items + AOI geometry (for TileSelector)
-    - build_scene_catalog_df(): raw catalog DataFrame from items
-    - selected_scenes_to_time_serie_df(): one row per anchor date
-    - selected_scenes_to_selected_tiles_df(): tile-level rows used by the selector
+    Responsibilities:
+      - build_scene_items():
+          raw STAC items + AOI geometry (for TileSelector)
+      - build_scene_catalog_df():
+          raw catalog DataFrame from items
+      - selected_scenes_to_time_serie_df():
+          one row per anchor date (time series)
+      - selected_scenes_to_selected_tiles_df():
+          tile-level rows for each SelectedScene
     """
 
     def __init__(self, service: CdseSceneCatalogService | None = None) -> None:
@@ -33,6 +39,11 @@ class SceneCatalogBuilder:
         date_end: str,
         params: StacQueryParams,
     ) -> Tuple[List[Any], Dict[str, Any]]:
+        """
+        Query STAC and return:
+          - items: list of STAC items (pystac.Item or dict-like)
+          - aoi_geom_geojson: AOI geometry as GeoJSON dict
+        """
         return self.service.search_items(
             aoi_geojson_path=aoi_path,
             date_start=date_start,
@@ -43,22 +54,44 @@ class SceneCatalogBuilder:
     # ------------------------------------------------------------------
     # Raw catalog dataframe
     # ------------------------------------------------------------------
-    def build_scene_catalog_df(self, items: List[Any], *, collection: str) -> pd.DataFrame:
+    def build_scene_catalog_df(
+        self,
+        items: List[Any],
+        *,
+        collection: str,
+    ) -> pd.DataFrame:
         """
-        Returns DataFrame with columns:
+        Returns a DataFrame with columns:
           id, datetime, cloud_cover, platform, constellation, collection
         """
         return self.service.items_to_dataframe(items, collection=collection)
 
     # ------------------------------------------------------------------
-    # SelectedScene -> time series
+    # SelectedScene -> time series (anchor-level)
     # ------------------------------------------------------------------
-    def selected_scenes_to_time_serie_df(self, selected_scenes: List[Any]) -> pd.DataFrame:
+    def selected_scenes_to_time_serie_df(
+        self,
+        selected_scenes: List[Any],
+    ) -> pd.DataFrame:
         """
         One row per anchor date (fictional grid date).
 
-        Columns:
-          anchor_date, acq_datetime, tile_ids, tiles_count, cloud_score, coverage_frac
+        Expected SelectedScene attributes:
+          - anchor_date: date
+          - acq_dt: datetime
+          - items: list of STAC items (for tile_ids)
+          - cloud_score: float
+          - coverage_frac: float in [0, 1]
+          - coverage_area: float (same units as TileSelector's AOI area, e.g. m²)
+
+        Output columns:
+          anchor_date        (date)
+          acq_datetime       (datetime[UTC])
+          tile_ids           (pipe-separated string of tile IDs)
+          tiles_count        (int)
+          cloud_score        (float)
+          coverage_frac      (float)
+          coverage_area      (float)
         """
         rows: List[Dict[str, Any]] = []
 
@@ -78,6 +111,8 @@ class SceneCatalogBuilder:
                     "tiles_count": len(tile_ids),
                     "cloud_score": float(s.cloud_score),
                     "coverage_frac": float(s.coverage_frac),
+                    # may be missing on older objects, so guard with getattr
+                    "coverage_area": float(getattr(s, "coverage_area", float("nan"))),
                 }
             )
 
@@ -89,38 +124,69 @@ class SceneCatalogBuilder:
         return df
 
     # ------------------------------------------------------------------
-    # SelectedScene -> selected tiles catalog
+    # SelectedScene -> selected tiles catalog (tile-level)
     # ------------------------------------------------------------------
-    def selected_scenes_to_selected_tiles_df(self, selected_scenes: List[Any], *, collection: str) -> pd.DataFrame:
+    def selected_scenes_to_selected_tiles_df(
+        self,
+        selected_scenes: List[Any],
+        *,
+        collection: str,
+    ) -> pd.DataFrame:
         """
-        Tile-level rows used by the selector (duplicates allowed across anchors if same acquisition reused).
+        Tile-level rows used by the selector (duplicates allowed across anchors
+        if same acquisition is reused).
 
-        Columns:
-          anchor_date, acq_datetime, id, datetime, cloud_cover, platform, constellation, collection
+        For each SelectedScene s and each item it in s.items, we create one row.
+
+        Expected SelectedScene attributes:
+          - anchor_date
+          - acq_dt
+          - items
+          - coverage_frac
+          - coverage_area (optional but expected in new flow)
+
+        Base item fields come from CdseSceneCatalogService.items_to_dataframe,
+        typically:
+          id, datetime, cloud_cover, platform, constellation, collection
+
+        Output columns (order):
+          anchor_date
+          acq_datetime
+          <all item fields from items_to_dataframe(...)>
+          coverage_frac_union   (same for all tiles in a SelectedScene)
+          coverage_area_union   (same for all tiles in a SelectedScene)
         """
         rows: List[Dict[str, Any]] = []
 
         for s in selected_scenes:
             for it in s.items:
-                # reuse service logic by extracting fields from item, but attach anchor info
-                item_id = it.id if hasattr(it, "id") else it.get("id")
-
                 # Let the service produce the standard catalog row for this one item
                 one_df = self.service.items_to_dataframe([it], collection=collection)
                 if one_df.empty:
                     continue
+
                 rec = dict(one_df.iloc[0])
 
+                # Attach anchor information
                 rec["anchor_date"] = s.anchor_date.isoformat()
                 rec["acq_datetime"] = s.acq_dt.isoformat()
+
+                # Union coverage information for this SelectedScene
+                rec["coverage_frac_union"] = float(s.coverage_frac)
+                rec["coverage_area_union"] = float(getattr(s, "coverage_area", float("nan")))
 
                 rows.append(rec)
 
         df = pd.DataFrame(rows)
-        if not df.empty:
-            df["anchor_date"] = pd.to_datetime(df["anchor_date"]).dt.date
-            df["acq_datetime"] = pd.to_datetime(df["acq_datetime"], utc=True)
+        if df.empty:
+            return df
 
-        # nice ordering
-        cols = ["anchor_date", "acq_datetime"] + [c for c in df.columns if c not in {"anchor_date", "acq_datetime"}]
-        return df[cols]
+        # Normalise date / datetime types
+        df["anchor_date"] = pd.to_datetime(df["anchor_date"]).dt.date
+        df["acq_datetime"] = pd.to_datetime(df["acq_datetime"], utc=True)
+
+        # Nice column ordering: anchor/acq first, then others
+        leading = ["anchor_date", "acq_datetime"]
+        # keep order but move leading to front
+        other_cols = [c for c in df.columns if c not in leading]
+        return df[leading + other_cols]

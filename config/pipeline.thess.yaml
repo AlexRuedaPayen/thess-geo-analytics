@@ -34,11 +34,11 @@ scene_catalog:
   max_items: 3000
   collection: "sentinel-2-l2a"
   use_tile_selector: true
-  full_cover_threshold: 0.999
+  full_cover_threshold: 0.95
   allow_union: true
   n_anchors: 64
-  window_days: 21
-  max_union_tiles: 2
+  window_days: 42
+  max_union_tiles: 20
   out_table: "scenes_s2_all.csv"
 
 # ----------------------------------

@@ -118,5 +118,5 @@ superpixel-features:
 # "Full" for now = only AOI + Scene Catalog
 # ----------
 .PHONY: full
-full: extract-aoi scene-catalog assets-manifest
+full: extract-aoi scene-catalog
 	@echo "✓ AOI extraction + scene catalog completed.
