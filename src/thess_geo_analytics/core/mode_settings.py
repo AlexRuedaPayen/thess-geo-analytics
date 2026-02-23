@@ -65,9 +65,9 @@ class ModeSettings:
             return sc
 
         # Dev targets
-        MAX_DAYS_DEV = 1469          # ~4 years
+        MAX_DAYS_DEV = 1469       
         MAX_ITEMS_DEV = 400
-        MAX_CLOUD_DEV = 20.0         # you want 20% in dev
+        MAX_CLOUD_DEV = 20.0        
         N_ANCHORS_DEV = 24
         WINDOW_DAYS_DEV = 21
 
@@ -138,10 +138,9 @@ class ModeSettings:
         max_scenes = am.get("max_scenes")
         if isinstance(max_scenes, int):
             am["max_scenes"] = min(max_scenes, MAX_SCENES_DEV)
-        # if None, leave as None – “keep all logically” as you requested
 
         # ---- download_n ----
-        DOWNLOAD_N_DEV = 10
+        DOWNLOAD_N_DEV = 300 # <----that's 100 GiB of data whihc is a symbolic cap
         dn = am.get("download_n")
         if isinstance(dn, int):
             am["download_n"] = min(dn, DOWNLOAD_N_DEV)
