@@ -1,17 +1,41 @@
 from __future__ import annotations
 
-import sys
+import argparse
 
 from thess_geo_analytics.pipelines.BuildAssetsManifestPipeline import (
     BuildAssetsManifestPipeline,
     BuildAssetsManifestParams,
 )
+from thess_geo_analytics.core.pipeline_config import load_pipeline_config
+from thess_geo_analytics.utils.log_parameters import log_parameters
+
+ALLOWED_RAW_STORAGE_MODES = {
+    "url_to_local",
+    "url_to_gcs_keep_local",
+    "url_to_gcs_drop_local",
+    "gcs_to_local",
+}
+
+PARAMETER_DOCS = {
+    "max_scenes": "Max scenes in manifest (None = all scenes).",
+    "date_start": "Earliest acquisition date YYYY-MM-DD (global pipeline date).",
+    "sort_mode": "Ordering before capping max_scenes.",
+    "download_n": "Number of scenes to download & validate (0 = none).",
+    "download_missing": "If False, skip all downloads (manifest only).",
+    "validate_rasterio": "Open each download with rasterio to validate.",
+    "out_name": "Output CSV filename for assets manifest.",
+    "upload_to_gcs": "Whether to upload raw bands to GCS.",
+    "gcs_bucket": "GCS bucket for raw bands.",
+    "gcs_prefix": "Prefix inside bucket for raw bands.",
+    "gcs_credentials": "Path to GCS credentials JSON (optional).",
+    "delete_local_after_upload": "Delete local files after upload if True.",
+    "raw_storage_mode": "How raw bands are handled (local/GCS).",
+    "band_resolution": "Target band resolution in metres (e.g. 10 or 20).",
+    "max_download_workers": "Max concurrent downloads.",
+}
 
 
 def _as_bool01(x: str) -> bool:
-    """
-    Accepts: "0/1", "true/false", "yes/no", "y/n" (case-insensitive).
-    """
     x = x.strip().lower()
     if x in {"1", "true", "yes", "y"}:
         return True
@@ -20,83 +44,151 @@ def _as_bool01(x: str) -> bool:
     raise ValueError(f"Expected boolean 0/1 or true/false, got: {x}")
 
 
-# Allowed raw storage modes for CLI arg #12
-ALLOWED_RAW_STORAGE_MODES = {
-    "url_to_local",
-    "url_to_gcs_keep_local",
-    "url_to_gcs_drop_local",
-    "gcs_to_local",
-}
-
-
 def main() -> None:
-    # Usage examples:
-    #   python -m thess_geo_analytics.entrypoints.BuildAssetsManifest
-    #   python -m thess_geo_analytics.entrypoints.BuildAssetsManifest 200 10
-    #   python -m thess_geo_analytics.entrypoints.BuildAssetsManifest 200 10 2020-01-01 2026-02-01 cloud_then_time assets_manifest.csv
-    #
-    # With GCP options:
-    #   python -m thess_geo_analytics.entrypoints.BuildAssetsManifest 999999 999999 None None as_is assets_manifest_selected.csv 1 thess-geo-analytics raw_s2 C:/Users/alexr/.gcp/thess-geo-analytics-nvdi.json 0 url_to_gcs_keep_local
-    #
-    # Args:
-    #   1) max_scenes (optional, default None -> all)
-    #   2) download_n (optional, default 3)
-    #   3) date_start YYYY-MM-DD or "None" (optional)
-    #   4) date_end   YYYY-MM-DD or "None" (optional)
-    #   5) sort_mode  (optional: as_is | cloud_then_time | time) default as_is
-    #   6) out_name   (optional) default assets_manifest_selected.csv
-    #   7) upload_to_gcs (optional: 0/1, true/false, yes/no) default 0
-    #   8) gcs_bucket (optional, required if upload_to_gcs=1)
-    #   9) gcs_prefix (optional, default "raw_s2")
-    #  10) gcs_credentials (optional path or "None" for default auth)
-    #  11) delete_local_after_upload (optional: 0/1, default 0)
-    #  12) raw_storage_mode (optional, default "url_to_local")
-    #       one of {"url_to_local", "url_to_gcs_keep_local",
-    #               "url_to_gcs_drop_local", "gcs_to_local"}
+    """
+    Simplified CLI for BuildAssetsManifest.
 
-    max_scenes = int(sys.argv[1]) if len(sys.argv) > 1 else None
-    download_n = int(sys.argv[2]) if len(sys.argv) > 2 else 3
-    date_start = str(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] != "None" else None
-    date_end = str(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] != "None" else None
-    sort_mode = str(sys.argv[5]) if len(sys.argv) > 5 else "as_is"
-    out_name = str(sys.argv[6]) if len(sys.argv) > 6 else "assets_manifest_selected.csv"
+    Defaults are read from config/pipeline.thess.yaml
+    and can be overridden via optional flags.
 
-    upload_to_gcs = _as_bool01(sys.argv[7]) if len(sys.argv) > 7 else False
-    gcs_bucket = str(sys.argv[8]) if len(sys.argv) > 8 and sys.argv[8] != "None" else None
-    gcs_prefix = str(sys.argv[9]) if len(sys.argv) > 9 and sys.argv[9] != "None" else "raw_s2"
-    gcs_credentials = str(sys.argv[10]) if len(sys.argv) > 10 and sys.argv[10] != "None" else None
-    delete_local_after_upload = _as_bool01(sys.argv[11]) if len(sys.argv) > 11 else False
-    raw_storage_mode = str(sys.argv[12]) if len(sys.argv) > 12 else "url_to_local"
+    - Temporal extent comes from pipeline.date_start (single global knob).
+    - Other defaults come from assets_manifest section (possibly mode-adjusted).
+    """
+    cfg = load_pipeline_config()
+    ms = cfg.mode_settings
 
-    if sort_mode not in {"as_is", "cloud_then_time", "time"}:
-        raise SystemExit("sort_mode must be one of: as_is | cloud_then_time | time")
+    am_raw = cfg.assets_manifest_params
+    am_cfg = cfg.effective_assets_manifest_params
 
-    if raw_storage_mode not in ALLOWED_RAW_STORAGE_MODES:
-        raise SystemExit(
-            f"raw_storage_mode must be one of: "
-            f"{', '.join(sorted(ALLOWED_RAW_STORAGE_MODES))} "
-            f"(got: {raw_storage_mode!r})"
-        )
+    # global date_start (single source of truth)
+    pipeline_date_start = cfg.raw["pipeline"]["date_start"]
+
+    band_res = ms.effective_band_resolution(am_raw)
+    max_workers_default = ms.effective_max_download_workers()
+
+    p = argparse.ArgumentParser(
+        description="Build assets_manifest_selected.csv from scenes_selected.csv"
+    )
+
+    # ---- high-value knobs ----
+    p.add_argument(
+        "--max-scenes",
+        type=int,
+        default=am_cfg.get("max_scenes"),
+        help="Max scenes in manifest (default from YAML+mode, None=all).",
+    )
+    p.add_argument(
+        "--date-start",
+        default=pipeline_date_start,
+        help="Earliest acquisition date YYYY-MM-DD (default from pipeline.date_start).",
+    )
+    p.add_argument(
+        "--sort-mode",
+        default=am_cfg.get("sort_mode", "cloud_then_time"),
+        choices=["as_is", "cloud_then_time", "time"],
+        help="Ordering before capping max_scenes.",
+    )
+    p.add_argument(
+        "--download-n",
+        type=int,
+        default=am_cfg.get("download_n", 9999),
+        help="Number of scenes to download & validate (0 = none).",
+    )
+    p.add_argument(
+        "--no-download",
+        action="store_true",
+        help="Skip all downloads (manifest only).",
+    )
+    p.add_argument(
+        "--band-resolution",
+        type=int,
+        default=band_res,
+        help="Target NDVI resolution in metres (10 or 20).",
+    )
+    p.add_argument(
+        "--max-download-workers",
+        type=int,
+        default=max_workers_default,
+        help=(
+            "Max concurrent downloads "
+            "(default mode-dependent; env THESS_MAX_DOWNLOAD_WORKERS overrides)."
+        ),
+    )
+    p.add_argument(
+        "--out-name",
+        default=am_cfg.get("out_table", "assets_manifest_selected.csv"),
+        help="Output CSV filename (under outputs/tables).",
+    )
+    p.add_argument(
+        "--raw-storage-mode",
+        default=am_cfg.get("raw_storage_mode", "url_to_local"),
+        choices=sorted(ALLOWED_RAW_STORAGE_MODES),
+        help="How raw bands are handled (local/GCS).",
+    )
+    p.add_argument(
+        "--upload-to-gcs",
+        default=str(am_cfg.get("upload_to_gcs", False)),
+        help="Upload raw bands to GCS (0/1, true/false).",
+    )
+    p.add_argument(
+        "--gcs-bucket",
+        default=am_cfg.get("gcs_bucket"),
+        help="GCS bucket for raw bands.",
+    )
+    p.add_argument(
+        "--gcs-prefix",
+        default=am_cfg.get("gcs_prefix", "raw_s2"),
+        help="Prefix in bucket for raw bands.",
+    )
+    p.add_argument(
+        "--gcs-credentials",
+        default=am_cfg.get("gcs_credentials"),
+        help="Path to service account JSON (optional).",
+    )
+    p.add_argument(
+        "--delete-local-after-upload",
+        default=str(am_cfg.get("delete_local_after_upload", False)),
+        help="Delete local files after upload (0/1, true/false).",
+    )
+
+    args = p.parse_args()
+
+    upload_to_gcs = _as_bool01(args.upload_to_gcs)
+    delete_local_after_upload = _as_bool01(args.delete_local_after_upload)
+
+    if upload_to_gcs and not args.gcs_bucket:
+        raise SystemExit("upload_to_gcs=True but no --gcs-bucket set (nor in YAML).")
+
+    # effective download_n: CLI still wins
+    effective_download_n = 0 if args.no_download else args.download_n
+
+    params = BuildAssetsManifestParams(
+        max_scenes=args.max_scenes,
+        date_start=args.date_start,
+        sort_mode=args.sort_mode,  # type: ignore[arg-type]
+        download_n=effective_download_n,
+        download_missing=not args.no_download,
+        validate_rasterio=True,
+        out_name=args.out_name,
+        upload_to_gcs=upload_to_gcs,
+        gcs_bucket=args.gcs_bucket,
+        gcs_prefix=args.gcs_prefix,
+        gcs_credentials=args.gcs_credentials,
+        delete_local_after_upload=delete_local_after_upload,
+        raw_storage_mode=args.raw_storage_mode,  # type: ignore[arg-type]
+        band_resolution=args.band_resolution,
+        max_download_workers=args.max_download_workers,
+    )
+
+    extra = {
+        "mode": ms.mode,
+        "region": cfg.region_name,
+        "aoi_id": cfg.aoi_id,
+    }
+    log_parameters("BuildAssetsManifest", params, PARAMETER_DOCS, extra)
 
     pipe = BuildAssetsManifestPipeline()
-    pipe.run(
-        BuildAssetsManifestParams(
-            max_scenes=max_scenes,
-            date_start=date_start,
-            date_end=date_end,
-            sort_mode=sort_mode,  # type: ignore[arg-type]
-            download_n=download_n,
-            download_missing=True,
-            validate_rasterio=True,
-            out_name=out_name,
-            upload_to_gcs=upload_to_gcs,
-            gcs_bucket=gcs_bucket,
-            gcs_prefix=gcs_prefix,
-            gcs_credentials=gcs_credentials,
-            delete_local_after_upload=delete_local_after_upload,
-            raw_storage_mode=raw_storage_mode,  # type: ignore[arg-type]
-        )
-    )
+    pipe.run(params)
 
 
 if __name__ == "__main__":

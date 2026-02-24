@@ -250,7 +250,7 @@ class RawAssetStorageManager:
             )
             assert ok1 and local1.exists(), "url_to_local: local file missing"
             assert gcs1 is None, "url_to_local: should not set gcs_url"
-            print("[OK] url_to_local")
+            print("[SERVICE] url_to_local")
 
             # 2) url_to_gcs_keep_local
             local2 = tmpdir / "local2.tif"
@@ -269,7 +269,7 @@ class RawAssetStorageManager:
             )
             assert ok2 and local2.exists(), "url_to_gcs_keep_local: local file missing"
             assert isinstance(gcs2, str) and gcs2.startswith("gs://"), "url_to_gcs_keep_local: gcs_url not set"
-            print("[OK] url_to_gcs_keep_local")
+            print("[SERVICE] url_to_gcs_keep_local")
 
             # 3) url_to_gcs_drop_local
             local3 = tmpdir / "local3.tif"
@@ -289,7 +289,7 @@ class RawAssetStorageManager:
             assert ok3, "url_to_gcs_drop_local: ok flag should be True"
             assert isinstance(gcs3, str) and gcs3.startswith("gs://"), "url_to_gcs_drop_local: gcs_url not set"
             assert not local3.exists(), "url_to_gcs_drop_local: local file should be removed"
-            print("[OK] url_to_gcs_drop_local")
+            print("[SERVICE] url_to_gcs_drop_local")
 
             # 4) gcs_to_local (restore from existing gcs_url)
             #    Re-use gcs3 as the stored object; ensure local4 is recreated.
@@ -309,7 +309,7 @@ class RawAssetStorageManager:
             )
             assert ok4 and local4.exists(), "gcs_to_local: local file not restored from GCS"
             assert gcs4 == gcs3, "gcs_to_local: gcs_url should be preserved"
-            print("[OK] gcs_to_local")
+            print("[SERVICE] gcs_to_local")
 
         print("✓ RawAssetStorageManager smoke test OK")
 

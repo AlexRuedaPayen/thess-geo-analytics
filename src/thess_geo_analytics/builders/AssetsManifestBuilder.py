@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Literal
+import json  # <-- NEW
 
 import pandas as pd
 
@@ -21,7 +22,7 @@ class AssetsManifestBuildParams:
 
     - If you want "all", keep max_scenes=None.
     - If you want to cap for dev, set max_scenes=10 (etc).
-    - If you want a time slice, set date_start/date_end (YYYY-MM-DD).
+    - If you want a time slice, set date_start (YYYY-MM-DD).
     """
     max_scenes: Optional[int] = None
     collection: str = DEFAULT_COLLECTION
@@ -29,7 +30,6 @@ class AssetsManifestBuildParams:
 
     # optional filtering
     date_start: Optional[str] = None  # "YYYY-MM-DD"
-    date_end: Optional[str] = None    # "YYYY-MM-DD"
 
     # optional ordering
     sort_mode: SortMode = "as_is"
@@ -42,20 +42,33 @@ class AssetsManifestBuilder:
       href_b04, href_b08, href_scl,
       local_b04, local_b08, local_scl
 
-    No file I/O and no downloads here.
+    No file I/O and no downloads here, except for the STAC item cache
+    (JSON per scene) to avoid repeated network calls across runs.
     """
 
     REQUIRED_SCENES_COLS = {"id", "datetime", "cloud_cover"}
 
     def __init__(
         self,
+        *,
+        band_resolution: int = 10,
         stac: CdseStacService | None = None,
         resolver: StacAssetResolver | None = None,
     ) -> None:
+        """
+        band_resolution:
+          - 10 => prefer B04_10m / B08_10m (deep mode)
+          - 20 => prefer B04_20m / B08_20m (dev mode)
+        """
+        self.band_resolution = int(band_resolution)
         self.stac = stac or CdseStacService()
-        self.resolver = resolver or StacAssetResolver()
+        self.resolver = resolver or StacAssetResolver(
+            band_resolution=self.band_resolution
+        )
 
-    def build_assets_manifest_df(self, scenes_df: pd.DataFrame, params: AssetsManifestBuildParams) -> pd.DataFrame:
+    def build_assets_manifest_df(
+        self, scenes_df: pd.DataFrame, params: AssetsManifestBuildParams
+    ) -> pd.DataFrame:
         missing = self.REQUIRED_SCENES_COLS - set(scenes_df.columns)
         if missing:
             raise ValueError(f"Scenes catalog missing columns: {sorted(missing)}")
@@ -66,36 +79,62 @@ class AssetsManifestBuilder:
         df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce", utc=True)
         df = df.dropna(subset=["datetime"]).reset_index(drop=True)
 
-        # optional date filtering
+        # optional date filtering: only date_start now
         if params.date_start:
             start = pd.to_datetime(params.date_start, utc=True)
             df = df[df["datetime"] >= start]
-        if params.date_end:
-            # treat date_end as inclusive day (end-of-day)
-            end = pd.to_datetime(params.date_end, utc=True) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
-            df = df[df["datetime"] <= end]
 
         if df.empty:
             raise ValueError("No scenes left after datetime parsing / date filtering.")
 
         # optional sorting
         if params.sort_mode == "cloud_then_time":
-            # best quality first
             df = df.sort_values(["cloud_cover", "datetime"], ascending=[True, True])
         elif params.sort_mode == "time":
             df = df.sort_values(["datetime"], ascending=[True])
-        # else "as_is": keep input order (often already time-series order)
 
         # optional cap
         if params.max_scenes is not None:
             df = df.head(int(params.max_scenes))
+
+        # -------------------------------
+        # STAC item cache initialisation
+        # -------------------------------
+        stac_cache_dir = params.cache_root / "stac_items"
+        stac_cache_dir.mkdir(parents=True, exist_ok=True)
 
         rows: List[dict] = []
 
         for _, r in df.iterrows():
             item_id = str(r["id"])
 
-            item_json = self.stac.fetch_item(params.collection, item_id)
+            # Cache path for this scene's STAC item JSON
+            cache_path = stac_cache_dir / f"{item_id}.json"
+
+            # Try cache first
+            item_json = None
+            if cache_path.exists():
+                try:
+                    with cache_path.open("r", encoding="utf-8") as f:
+                        item_json = json.load(f)
+                    # Optional: you could add a debug print on first hit
+                    # print(f"[STAC CACHE] Hit for {item_id}")
+                except Exception:
+                    # Corrupted cache → ignore and refetch
+                    item_json = None
+
+            # If not in cache or failed to read → fetch from STAC and store
+            if item_json is None:
+                # First run or cache miss: actual network call
+                item_json = self.stac.fetch_item(params.collection, item_id)
+
+                try:
+                    with cache_path.open("w", encoding="utf-8") as f:
+                        json.dump(item_json, f)
+                except Exception:
+                    # Cache write failure should not break the pipeline
+                    pass
+
             hrefs = self.resolver.resolve_b04_b08_scl(item_json)
 
             scene_dir = params.cache_root / item_id
@@ -116,12 +155,6 @@ class AssetsManifestBuilder:
 
         out = pd.DataFrame(rows)
 
-        # quick sanity / reporting helpers
-        missing_hrefs = out[["href_b04", "href_b08", "href_scl"]].isna().any(axis=1).sum()
-        if missing_hrefs:
-            # keep builder pure, but this is still a useful hint when running a smoke test
-            pass
-
         return out
 
     @staticmethod
@@ -134,7 +167,7 @@ class AssetsManifestBuilder:
             raise FileNotFoundError(f"Missing scenes catalog: {scenes_csv}")
 
         scenes_df = pd.read_csv(scenes_csv)
-        builder = AssetsManifestBuilder()
+        builder = AssetsManifestBuilder(band_resolution=10)
 
         params = AssetsManifestBuildParams(
             max_scenes=5,

@@ -37,12 +37,15 @@ class SelectedScene:
     - items: 1..k tiles used to cover the AOI
     - cloud_score: selection score across timestamps (MAX cloud among tiles in union)
     - coverage_frac: AOI coverage fraction achieved by the chosen union
+    - coverage_area: AOI area covered by the chosen union (same CRS as _coverage_infos)
     """
     anchor_date: date
     acq_dt: datetime
     items: List[ItemLike]
     cloud_score: float
     coverage_frac: float
+    coverage_area: float
+
 
 @dataclass(frozen=True)
 class RankedCandidate:
@@ -51,7 +54,7 @@ class RankedCandidate:
 
     - acq_dt: real acquisition timestamp
     - items: chosen union of tiles for that timestamp
-    - cloud_score: max cloud in the union (your rule)
+    - cloud_score: max cloud in the union
     - coverage_frac: AOI coverage fraction achieved by the union
     - dist_days: |acq_date - anchor_date| in days (tie-break info)
     """
@@ -61,77 +64,6 @@ class RankedCandidate:
     cloud_score: float
     coverage_frac: float
     dist_days: int
-
-@dataclass(frozen=True)
-class AnchorCandidate:
-    anchor_date: date
-    acq_dt: datetime
-    items: List[ItemLike]
-    cloud_score: float
-    coverage_frac: float
-    dist_days: int
-
-    def rank_candidates_for_anchor(
-        self,
-        items: Sequence[ItemLike],
-        aoi_geom_4326,
-        *,
-        anchor_date: date,
-        window_days: int = 15,
-        top_k: int = 10,
-    ) -> List[AnchorCandidate]:
-        """
-        Return ranked candidates (best -> worst) for a single anchor date.
-        Uses the exact same union+scoring rules as select_regular_time_series.
-        """
-        if not items:
-            return []
-
-        half = window_days // 2
-        lo = anchor_date - timedelta(days=half)
-        hi = anchor_date + timedelta(days=half)
-
-        infos_all, _, _, aoi_area_value = self._coverage_infos(items, aoi_geom_4326)
-        if not infos_all or aoi_area_value <= 0:
-            return []
-
-        # group by real acquisition timestamp
-        by_dt: Dict[datetime, List[CoverageInfo]] = {}
-        for ci in infos_all:
-            if lo <= ci.acq_date <= hi:
-                by_dt.setdefault(ci.acq_dt, []).append(ci)
-
-        out: List[AnchorCandidate] = []
-        for dt, infos in by_dt.items():
-            chosen = self._best_union_for_timestamp(infos, aoi_area_value)
-            if chosen is None:
-                continue
-
-            cov_frac, chosen_infos = chosen
-            cloud_score = self._union_cloud_score_max(chosen_infos)
-            dist_days = abs((dt.date() - anchor_date).days)
-
-            out.append(
-                AnchorCandidate(
-                    anchor_date=anchor_date,
-                    acq_dt=dt,
-                    items=[ci.item for ci in chosen_infos],
-                    cloud_score=cloud_score,
-                    coverage_frac=cov_frac,
-                    dist_days=dist_days,
-                )
-            )
-
-        out.sort(
-            key=lambda c: (
-                c.cloud_score,          # lower is better
-                -c.coverage_frac,       # higher coverage is better
-                c.dist_days,            # closer is better
-                len(c.items),           # fewer tiles is better
-                c.acq_dt,               # stable
-            )
-        )
-        return out[: max(1, int(top_k))]
 
 
 class TileSelector:
@@ -146,6 +78,8 @@ class TileSelector:
            - group candidate items by their real acquisition timestamp (acq_dt)
            - for each timestamp group, find the best union of tiles that covers the AOI
              (single tile, then pairs, then triples... up to max_union_tiles)
+           - ONLY unions with coverage >= full_cover_threshold are valid
+             (if there is partial coverage but no such union, raise ValueError)
            - score that best union by cloud_score = max(cloud of tiles in union)
            - pick timestamp group with minimum cloud_score
              (tie-break: higher coverage, then closer to anchor, then fewer tiles)
@@ -192,6 +126,8 @@ class TileSelector:
           - restrict items to ±window_days//2 around anchor_date (by acquisition date)
           - group by real acquisition timestamp (acq_dt)
           - per timestamp: compute best union of tiles (1..max_union_tiles)
+              * only unions with coverage >= full_cover_threshold are valid
+              * if a timestamp has some coverage but no such union, ValueError is raised
           - score union by max cloud among tiles (cloud_score)
           - rank by:
               1) lower cloud_score
@@ -225,7 +161,7 @@ class TileSelector:
         for dt, infos in by_dt.items():
             chosen = self._best_union_for_timestamp(infos, aoi_area_value)
             if chosen is None:
-                continue
+                continue  # no usable coverage for this timestamp
 
             cov_frac, chosen_infos = chosen
             cloud_score = self._union_cloud_score_max(chosen_infos)
@@ -253,7 +189,6 @@ class TileSelector:
 
         return ranked[:top_k]
 
-
     def select_regular_time_series(
         self,
         items: Sequence[ItemLike],
@@ -269,7 +204,11 @@ class TileSelector:
           - anchors = midpoints of n_anchors equal subdivisions between [period_start, period_end]
           - for each anchor, pick best scene in ±window_days//2 around anchor.
 
-        Returns list of SelectedScene (len <= n_anchors if some anchors have no candidates).
+        NOTE:
+          - For each timestamp, only unions with coverage >= full_cover_threshold are valid.
+          - If a timestamp has some coverage but no such union, _best_union_for_timestamp
+            raises ValueError and that timestamp will not be silently downgraded to
+            a partial-coverage union.
         """
         if not items:
             return []
@@ -298,7 +237,6 @@ class TileSelector:
             lo = anchor - timedelta(days=half)
             hi = anchor + timedelta(days=half)
 
-            # stable ordering helps debugging
             candidate_dts = sorted([dt for dt in by_dt.keys() if lo <= dt.date() <= hi])
             if not candidate_dts:
                 continue
@@ -313,6 +251,8 @@ class TileSelector:
                 continue
 
             cov_frac, cloud_score, chosen_dt, chosen_infos = best
+            cov_area = cov_frac * aoi_area_value
+
             out.append(
                 SelectedScene(
                     anchor_date=anchor,
@@ -320,6 +260,7 @@ class TileSelector:
                     items=[ci.item for ci in chosen_infos],
                     cloud_score=cloud_score,
                     coverage_frac=cov_frac,
+                    coverage_area=cov_area,
                 )
             )
 
@@ -513,10 +454,13 @@ class TileSelector:
         """
         For each real acquisition timestamp dt:
           - compute best union of tiles that covers AOI
+          - ONLY unions with coverage >= full_cover_threshold are valid for dt
           - cloud_score = max(cloud among tiles in chosen union)
 
         Choose dt with minimal cloud_score (ties: higher coverage, closer to anchor, fewer tiles).
         Returns (coverage_frac, cloud_score, chosen_dt, chosen_infos).
+
+        If a timestamp has some coverage but no full union, _best_union_for_timestamp raises.
         """
         best: Optional[Tuple[float, float, datetime, List[CoverageInfo]]] = None
 
@@ -527,7 +471,7 @@ class TileSelector:
 
             chosen = self._best_union_for_timestamp(infos, aoi_area_value)
             if chosen is None:
-                continue
+                continue  # no usable coverage for this dt
 
             cov_frac, chosen_infos = chosen
             cloud_score = self._union_cloud_score_max(chosen_infos)
@@ -576,20 +520,25 @@ class TileSelector:
         """
         Find best union of tiles within same acquisition timestamp.
 
-        Preference:
-          - any union with coverage >= full_cover_threshold wins over non-full
-          - within same "full vs not full": minimize union cloud_score = max(cloud)
-          - then maximize coverage
-          - then fewer tiles
+        NEW BEHAVIOR:
 
-        If allow_union is False, only consider singles.
+          - Only unions with coverage >= full_cover_threshold are considered valid.
+          - Among those, prefer:
+              1) lower union cloud_score = max(cloud)
+              2) higher coverage
+              3) fewer tiles
+          - If there is *some* coverage (at least one combo passing min_intersection_frac)
+            but no union reaches full_cover_threshold, raise ValueError.
+          - If there is NO usable coverage at all (no combo passes min_intersection_frac),
+            return None so the caller can skip this timestamp.
         """
         if not infos or aoi_area_value <= 0:
             return None
 
         max_k = 1 if not self.allow_union else max(1, self.max_union_tiles)
 
-        best: Optional[Tuple[float, float, List[CoverageInfo]]] = None  # (cov_frac, cloud_score, infos)
+        best_full: Optional[Tuple[float, float, List[CoverageInfo]]] = None  # (cov_frac, cloud_score, infos)
+        best_any: Optional[Tuple[float, float, List[CoverageInfo]]] = None   # best combo regardless of full-ness
 
         for k in range(1, min(max_k, len(infos)) + 1):
             for combo in combinations(infos, k):
@@ -603,39 +552,66 @@ class TileSelector:
 
                 cloud_score = self._union_cloud_score_max(combo)
 
-                if best is None:
-                    best = (cov_frac, cloud_score, list(combo))
+                # Track best_any (best combo that passes min_intersection_frac)
+                if best_any is None:
+                    best_any = (cov_frac, cloud_score, list(combo))
+                else:
+                    any_cov, any_cloud, any_combo = best_any
+                    better_any = False
+                    if cloud_score < any_cloud - 1e-12:
+                        better_any = True
+                    elif abs(cloud_score - any_cloud) <= 1e-12 and cov_frac > any_cov + 1e-12:
+                        better_any = True
+                    elif (
+                        abs(cloud_score - any_cloud) <= 1e-12
+                        and abs(cov_frac - any_cov) <= 1e-12
+                        and len(combo) < len(any_combo)
+                    ):
+                        better_any = True
+
+                    if better_any:
+                        best_any = (cov_frac, cloud_score, list(combo))
+
+                # Now enforce full-cover requirement
+                if cov_frac < self.full_cover_threshold:
                     continue
 
-                best_cov, best_cloud, best_combo = best
+                if best_full is None:
+                    best_full = (cov_frac, cloud_score, list(combo))
+                    continue
 
-                full = cov_frac >= self.full_cover_threshold
-                best_full = best_cov >= self.full_cover_threshold
+                best_cov, best_cloud, best_combo = best_full
+                better_full = False
 
-                better = False
-                if full and not best_full:
-                    better = True
-                elif full == best_full:
-                    if cloud_score < best_cloud - 1e-12:
-                        better = True
-                    elif abs(cloud_score - best_cloud) <= 1e-12 and cov_frac > best_cov + 1e-12:
-                        better = True
-                    elif (
-                        abs(cloud_score - best_cloud) <= 1e-12
-                        and abs(cov_frac - best_cov) <= 1e-12
-                        and len(combo) < len(best_combo)
-                    ):
-                        better = True
+                if cloud_score < best_cloud - 1e-12:
+                    better_full = True
+                elif abs(cloud_score - best_cloud) <= 1e-12 and cov_frac > best_cov + 1e-12:
+                    better_full = True
+                elif (
+                    abs(cloud_score - best_cloud) <= 1e-12
+                    and abs(cov_frac - best_cov) <= 1e-12
+                    and len(combo) < len(best_combo)
+                ):
+                    better_full = True
 
-                if better:
-                    best = (cov_frac, cloud_score, list(combo))
+                if better_full:
+                    best_full = (cov_frac, cloud_score, list(combo))
 
-        if best is None:
-            return None
+        # If we have at least one full-coverage union, return the best one
+        if best_full is not None:
+            cov_frac, _, combo_infos = best_full
+            return cov_frac, combo_infos
 
-        cov_frac, _, combo_infos = best
-        return cov_frac, combo_infos
+        # If there was some coverage but no full union, raise
+        if best_any is not None:
+            best_cov, best_cloud, _ = best_any
+            raise ValueError(
+                f"No union reaches full_cover_threshold={self.full_cover_threshold!r}; "
+                f"best coverage was {best_cov:.6f} with cloud_score={best_cloud:.3f}."
+            )
+
+        # No usable coverage at all for this timestamp
+        return None
 
     def _union_cloud_score_max(self, combo: Sequence[CoverageInfo]) -> float:
-        # Your rule: for a union, cloud score is MAX cloud among tiles in the union.
         return float(max(ci.cloud for ci in combo)) if combo else float("inf")
