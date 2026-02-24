@@ -70,7 +70,13 @@ assets-manifest:
 	@echo "[RUN] BuildAssetsManifest (manifest only, light downloads)"
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildAssetsManifest
 
-# 4. Build NDVI monthly/quarterly composites
+# 4. Timestamp aggregation
+.PHONY: timestamps-aggregation
+timestamps-aggregation:
+	@echo "[RUN] BuildAggregatedTimestamps"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildAggregatedTimestamps
+
+# 5. Build NDVI monthly/quarterly composites
 .PHONY: ndvi-composites
 ndvi-composites:
 	@echo "[RUN] BuildNdviMonthlyComposite"
@@ -118,5 +124,5 @@ superpixel-features:
 # "Full" for now = only AOI + Scene Catalog
 # ----------
 .PHONY: full
-full: extract-aoi scene-catalog assets-manifest
+full: extract-aoi scene-catalog assets-manifest timestamps-aggregation
 	@echo "✓ AOI extraction + scene catalog completed.

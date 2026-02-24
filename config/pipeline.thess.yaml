@@ -62,6 +62,27 @@ assets_manifest:
   band_resolution: 10
 
 # ----------------------------------
+# Timestamps aggregation (BuildAggregatedTimestamps)
+# ----------------------------------
+
+timestamps_aggregation:
+  # parallelism
+  max_workers: 6        # you can tweak; dev mode is small-ish so 4–8 is reasonable
+  debug: false          # true = sequential + full tracebacks; false = parallel
+
+  # TileAggregator knobs
+  merge_method: "first"
+  resampling: "nearest"
+
+  # nodata choice:
+  # - 0.0 keeps uint16 S2 bands and uses 0 as nodata (standard for S2)
+  # - or, if you *really* want NaN, you can set nodata: .nan and keep promote_to_float_if_needed=True
+  nodata: 0.0
+
+  # bands to aggregate
+  bands: ["B04", "B08", "SCL"]
+
+# ----------------------------------
 # NDVI Monthly / Quarterly Composites
 # ----------------------------------
 ndvi_monthly_composite:
