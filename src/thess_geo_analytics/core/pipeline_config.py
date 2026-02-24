@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import os
 import yaml
 
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
@@ -73,7 +74,7 @@ class PipelineConfig:
 
         # Example naming convention "EL522_Thessaloniki.geojson"
         filename = f"{self.aoi_id.upper()}_{self.region_name}.geojson"
-        return settings.AOI_DIR / filename
+        return RepoPaths.aoi(filename)
 
     # ---- pipeline dates ----
     @property
@@ -215,8 +216,37 @@ class PipelineConfig:
         return upload_raw.get("remote_prefix", settings.UPLOAD_RAW_S2_PREFIX)
 
 
-def load_pipeline_config(path: Optional[Path] = None) -> PipelineConfig:
-    cfg_path = path or CONFIG_PATH
+DEFAULT_CONFIG_NAME = "pipeline.thess.yaml"
+
+
+def _resolve_config_path(config_path: str | Path | None = None) -> Path:
+    """
+    Resolve the pipeline configuration path with the following priority:
+    1) Explicit path argument
+    2) PIPELINE_CONFIG environment variable (absolute or relative to RepoPaths.ROOT)
+    3) RepoPaths.ROOT / "config" / DEFAULT_CONFIG_NAME
+    """
+    if config_path is not None:
+        return Path(config_path).expanduser().resolve()
+
+    env_path = os.environ.get("PIPELINE_CONFIG")
+    if env_path:
+        p = Path(env_path)
+        if not p.is_absolute():
+            p = RepoPaths.ROOT / p
+        return p.expanduser().resolve()
+
+    # Default: config/ under repo root
+    return (RepoPaths.ROOT / "config" / DEFAULT_CONFIG_NAME).resolve()
+
+
+def load_pipeline_config(config_path: str | Path | None = None) -> "PipelineConfig":
+    cfg_path = _resolve_config_path(config_path)
+
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"Pipeline config not found at: {cfg_path}")
+
     with cfg_path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    return PipelineConfig(raw=data)
+        raw = yaml.safe_load(f)
+
+    return PipelineConfig(raw=raw)
