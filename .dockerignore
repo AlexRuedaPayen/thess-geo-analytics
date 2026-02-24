@@ -1,0 +1,31 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.env
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Data / outputs
+DATA_LAKE/
+*.tif
+*.tiff
+*.aux.xml
+*.log
+
+# Misc
+*.zip
+*.tar
+*.tar.gz

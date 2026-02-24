@@ -2,7 +2,9 @@ from pathlib import Path
 import os
 
 class RepoPaths:
-    ROOT = Path(__file__).resolve().parents[3]
+    # If THESS_GEO_ROOT is set, trust it; otherwise fall back to dev layout
+    _default_root = Path(__file__).resolve().parents[3]
+    ROOT = Path(os.environ.get("THESS_GEO_ROOT", str(_default_root)))
 
     # Base DATA_LAKE, raw data
     DATA_LAKE = Path(os.environ.get("DATA_LAKE", str(ROOT / "DATA_LAKE")))
@@ -20,7 +22,6 @@ class RepoPaths:
     FIGURES = OUTPUTS / "figures"
     TMP = OUTPUTS / "tmp"
 
-    # --- Accessor methods ---
     @staticmethod
     def raw(filename: str) -> Path:
         return RepoPaths.DATA_RAW / filename
@@ -40,7 +41,6 @@ class RepoPaths:
     @staticmethod
     def tmp(filename: str) -> Path:
         return RepoPaths.TMP / filename
-
 
 if __name__ == "__main__":
     print("ROOT:", RepoPaths.ROOT)
