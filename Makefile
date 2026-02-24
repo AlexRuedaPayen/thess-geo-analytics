@@ -47,33 +47,29 @@ help:
 
 .PHONY: extract-aoi
 extract-aoi:
-	@echo 
-	@echo _____________________________________________________________
-	@echo 
+	@echo _____________________________________________________________"
+	@echo "
 	@echo [RUN] ExtractAoi for region from config"
 	$(PYTHON) -m thess_geo_analytics.entrypoints.ExtractAoi
 
 .PHONY: scene-catalog
 scene-catalog:
-	@echo 
-	@echo _____________________________________________________________
-	@echo 
+	@echo _____________________________________________________________"
+	@echo "
 	@echo [RUN] BuildSceneCatalog from config
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildSceneCatalog
 
 .PHONY: assets-manifest
 assets-manifest:
-	@echo 
-	@echo _____________________________________________________________
-	@echo 
+	@echo _____________________________________________________________"
+	@echo "
 	@echo [RUN] BuildAssetsManifest (manifest only, config-driven)
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildAssetsManifest
 
 .PHONY: timestamps-aggregation
 timestamps-aggregation:
-	@echo 
-	@echo _____________________________________________________________
-	@echo 
+	@echo _____________________________________________________________"
+	@echo "
 	@echo [RUN] BuildAggregatedTimestamps
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildAggregatedTimestamps
 
