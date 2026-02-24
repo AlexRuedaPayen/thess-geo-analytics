@@ -224,7 +224,7 @@ class ModeSettings:
             except ValueError:
                 pass
 
-        return 4 if self.is_dev else 8
+        return 2 if self.is_dev else 4
 
     def effective_gdal_num_threads(
         self, env: Optional[Mapping[str, str]] = None

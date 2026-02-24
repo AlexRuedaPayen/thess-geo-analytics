@@ -41,6 +41,6 @@ class ExtractAoiPipeline:
 
         self.builder.export_geojson(aoi_gdf, out_path)
 
-        print(f"[OK] AOI extracted for {nuts_code} ({region_name})")
-        print(f"[OK] Saved to: {out_path}")
+        print(f"[OUTPUT] AOI extracted for {nuts_code} ({region_name})")
+        print(f"[OUTPUT] Saved to: {out_path}")
         return out_path

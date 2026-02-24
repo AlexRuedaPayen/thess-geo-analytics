@@ -8,6 +8,17 @@ from thess_geo_analytics.builders.TimestampsAggregationBuilder import (
     TimestampsAggregationParams,
 )
 from thess_geo_analytics.core.pipeline_config import load_pipeline_config
+from thess_geo_analytics.utils.log_parameters import log_parameters
+
+
+PARAMETER_DOCS = {
+    "max_workers": "Max parallel timestamps to aggregate.",
+    "debug": "If True, run sequentially and re-raise errors.",
+    "merge_method": "Raster merge method (TileAggregator).",
+    "resampling": "Resampling method for warping/reprojecting.",
+    "nodata": "Output nodata value used in mosaics.",
+    "bands": "Bands to aggregate per timestamp.",
+}
 
 
 def _as_bool01(x: str) -> bool:
@@ -25,6 +36,7 @@ def _parse_bands(bands: Sequence[str] | None) -> tuple[str, ...]:
     # allow comma-separated single arg or multiple args
     if len(bands) == 1 and ("," in bands[0] or ";" in bands[0] or "|" in bands[0]):
         import re
+
         parts = re.split(r"[;,|]", bands[0])
         return tuple(b.strip() for b in parts if b.strip())
     return tuple(bands)
@@ -50,15 +62,20 @@ def main() -> None:
         yaml_max_workers = ms.effective_max_download_workers()
 
     p = argparse.ArgumentParser(
-        description="Aggregate per-timestamp Sentinel-2 tiles into mosaics "
-                    "(one folder per acq_datetime under DATA_LAKE/data_raw/aggregated)."
+        description=(
+            "Aggregate per-timestamp Sentinel-2 tiles into mosaics "
+            "(one folder per acq_datetime under DATA_LAKE/data_raw/aggregated)."
+        )
     )
 
     p.add_argument(
         "--max-workers",
         type=int,
         default=yaml_max_workers,
-        help=f"Max parallel timestamps to aggregate (default from YAML/mode: {yaml_max_workers}).",
+        help=(
+            "Max parallel timestamps to aggregate "
+            f"(default from YAML/mode: {yaml_max_workers})."
+        ),
     )
     p.add_argument(
         "--debug",
@@ -79,15 +96,19 @@ def main() -> None:
         "--nodata",
         type=float,
         default=yaml_nodata,
-        help=f"Output nodata value (default from YAML: {yaml_nodata}). "
-             "Use 0.0 for S2 uint16; use NaN with float output if desired.",
+        help=(
+            f"Output nodata value (default from YAML: {yaml_nodata}). "
+            "Use 0.0 for S2 uint16; use NaN with float output if desired."
+        ),
     )
     p.add_argument(
         "--bands",
         nargs="*",
         default=yaml_bands,
-        help=f"Bands to aggregate per timestamp (default from YAML: {yaml_bands}). "
-             "Example: --bands B04 B08 SCL",
+        help=(
+            f"Bands to aggregate per timestamp (default from YAML: {yaml_bands}). "
+            "Example: --bands B04 B08 SCL"
+        ),
     )
 
     args = p.parse_args()
@@ -100,7 +121,6 @@ def main() -> None:
     if max_workers <= 0:
         max_workers = 1
 
-    # Create params for the builder
     ta_params = TimestampsAggregationParams(
         max_workers=max_workers,
         merge_method=args.merge_method,
@@ -110,12 +130,12 @@ def main() -> None:
         debug=debug,
     )
 
-    print(
-        f"[INFO] Timestamps aggregation config -> "
-        f"max_workers={max_workers}, debug={debug}, "
-        f"merge_method={args.merge_method!r}, resampling={args.resampling!r}, "
-        f"nodata={args.nodata}, bands={bands}"
-    )
+    extra = {
+        "mode": ms.mode,
+        "region": cfg.region_name,
+        "aoi_id": cfg.aoi_id,
+    }
+    log_parameters("BuildAggregatedTimestamps", ta_params, PARAMETER_DOCS, extra)
 
     builder = TimestampsAggregationBuilder(ta_params)
     out_folders = builder.run()

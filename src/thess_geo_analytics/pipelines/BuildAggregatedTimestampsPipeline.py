@@ -12,6 +12,6 @@ class BuildAggregatedTimestampsPipeline:
         params = TimestampsAggregationParams(max_workers=6)
         builder = TimestampsAggregationBuilder(params)
         out_folders = builder.run()
-        
-        print(f"[OK] Aggregated {len(out_folders)} timestamps")
+
+        print(f"[OUTPUT] Aggregated {len(out_folders)} timestamps")
         return out_folders

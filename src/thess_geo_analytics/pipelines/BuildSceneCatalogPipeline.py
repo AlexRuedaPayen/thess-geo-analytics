@@ -83,8 +83,8 @@ class BuildSceneCatalogPipeline:
         )
         raw_df.to_csv(raw_csv, index=False)
 
-        print(f"[OK] scenes_catalog exported => {raw_csv}")
-        print(f"[OK] Raw scenes found: {len(raw_df)}")
+        print(f"[OUTPUT] scenes_catalog exported => {raw_csv}")
+        print(f"[INFO] Raw scenes found: {len(raw_df)}")
 
         # If no items, also write empty outputs and exit
         if not items or raw_df.empty or not params.use_tile_selector:
@@ -125,9 +125,9 @@ class BuildSceneCatalogPipeline:
                     ]
                 ).to_csv(ts_cov_csv, index=False)
 
-                print(f"[OK] scenes_selected exported => {selected_csv} (empty)")
-                print(f"[OK] time_serie exported     => {ts_csv} (empty)")
-                print(f"[OK] timestamps_coverage exported => {ts_cov_csv} (empty)")
+                print(f"[OUTPUT] scenes_selected exported => {selected_csv} (empty)")
+                print(f"[OUTPUT] time_serie exported     => {ts_csv} (empty)")
+                print(f"[OUTPUT] timestamps_coverage exported => {ts_cov_csv} (empty)")
 
             return raw_csv
 
@@ -193,11 +193,11 @@ class BuildSceneCatalogPipeline:
         )
 
         cov_df.to_csv(ts_cov_csv, index=False)
-        print(f"[OK] timestamps_coverage exported => {ts_cov_csv}")
+        print(f"[OUTPUT] timestamps_coverage exported => {ts_cov_csv}")
 
         n_full = int(cov_df["has_full_cover"].sum()) if not cov_df.empty else 0
         print(
-            f"[OK] Timestamps with full cover (>= {params.full_cover_threshold:.3f}): {n_full}"
+            f"[INFO] Timestamps with full cover (>= {params.full_cover_threshold:.3f}): {n_full}"
         )
 
         # ------------------------------------------------------------------
@@ -212,7 +212,7 @@ class BuildSceneCatalogPipeline:
                     cov_df.loc[cov_df["has_full_cover"], "acq_datetime"]
                 ).dt.to_pydatetime()
             )
-            print(f"[OK] Timestamps kept for TileSelector (has_full_cover=True): {len(good_ts)}")
+            print(f"[INFO] Timestamps kept for TileSelector (has_full_cover=True): {len(good_ts)}")
 
             items_for_selector = []
             if good_ts:
@@ -252,8 +252,8 @@ class BuildSceneCatalogPipeline:
                 ]
             ).to_csv(ts_csv, index=False)
 
-            print(f"[OK] scenes_selected exported => {selected_csv} (empty)")
-            print(f"[OK] time_serie exported     => {ts_csv} (empty)")
+            print(f"[OUTPUT] scenes_selected exported => {selected_csv} (empty)")
+            print(f"[OUTPUT] time_serie exported     => {ts_csv} (empty)")
             return ts_csv
 
         # ------------------------------------------------------------------
@@ -288,17 +288,17 @@ class BuildSceneCatalogPipeline:
         ts_df = self.builder.selected_scenes_to_time_serie_df(selected_scenes)
         ts_df.to_csv(ts_csv, index=False)
 
-        print(f"[OK] scenes_selected exported => {selected_csv}")
-        print(f"[OK] time_serie exported     => {ts_csv}")
-        print(f"[OK] Anchors requested: {params.n_anchors}, anchors with selection: {len(ts_df)}")
+        print(f"[OUTPUT] scenes_selected exported => {selected_csv}")
+        print(f"[OUTPUT] time_serie exported     => {ts_csv}")
+        print(f"[INFO] Anchors requested: {params.n_anchors}, anchors with selection: {len(ts_df)}")
 
         if not ts_df.empty:
             print(
-                f"[OK] Coverage frac: min={ts_df['coverage_frac'].min():.3f} "
+                f"[INFO] Coverage frac: min={ts_df['coverage_frac'].min():.3f} "
                 f"median={ts_df['coverage_frac'].median():.3f} max={ts_df['coverage_frac'].max():.3f}"
             )
             print(
-                f"[OK] Cloud score:   min={ts_df['cloud_score'].min():.2f} "
+                f"[INFO] Cloud score:   min={ts_df['cloud_score'].min():.2f} "
                 f"median={ts_df['cloud_score'].median():.2f} max={ts_df['cloud_score'].max():.2f}"
             )
 

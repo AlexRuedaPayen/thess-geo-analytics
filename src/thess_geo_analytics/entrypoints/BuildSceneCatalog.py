@@ -8,6 +8,21 @@ from thess_geo_analytics.pipelines.BuildSceneCatalogPipeline import (
     BuildSceneCatalogParams,
 )
 from thess_geo_analytics.core.pipeline_config import load_pipeline_config
+from thess_geo_analytics.utils.log_parameters import log_parameters
+
+
+PARAMETER_DOCS = {
+    "date_start": "Earliest acquisition date (YYYY-MM-DD).",
+    "cloud_cover_max": "Maximum allowed cloud cover percentage.",
+    "max_items": "Maximum number of STAC items (scenes) to retrieve.",
+    "collection": "STAC collection ID (e.g. sentinel-2-l2a).",
+    "use_tile_selector": "Whether to apply tile selector based on AOI coverage.",
+    "full_cover_threshold": "Minimum fraction of AOI covered by a single tile.",
+    "allow_union": "Allow merging multiple tiles to cover the AOI.",
+    "n_anchors": "Number of temporal anchors in the selection period.",
+    "window_days": "Half-window size (days) around each anchor.",
+    "max_union_tiles": "Maximum number of tiles allowed in a union.",
+}
 
 
 def _as_bool01(x: str) -> bool:
@@ -25,19 +40,22 @@ def main() -> None:
     # scene_catalog-specific knobs (cloud_cover_max, max_items, etc.)
     sc_cfg = cfg.scene_catalog_params
 
-    # 🔹 Single global temporal knob, from YAML: pipeline.date_start
+    # Single global temporal knob, from YAML: pipeline.date_start
     pipeline_date_start = cfg.raw["pipeline"]["date_start"]
 
     aoi_default_path = cfg.aoi_path  # <--- this is important
 
     p = argparse.ArgumentParser(
-        description="Build Sentinel-2 scene catalog (scenes_s2_all.csv + scenes_selected.csv)."
+        description=(
+            "Build Sentinel-2 scene catalog "
+            "(scenes_s2_all.csv + scenes_selected.csv)."
+        )
     )
 
     p.add_argument(
         "--aoi",
         default=str(aoi_default_path),
-        help="Path to AOI GeoJSON (default from YAML aoi.file).",
+        help="Path to AOI GeoJSON (default from YAML aoi.file or derived).",
     )
 
     # Core temporal & quality params
@@ -96,7 +114,7 @@ def main() -> None:
     p.add_argument(
         "--max-union-tiles",
         type=int,
-        default=sc_cfg.get("max_union_tiles", 2),
+        default=sc_cfg.get("max_union_tiles", 20),
         help="Maximum number of tiles to union.",
     )
 
@@ -106,8 +124,6 @@ def main() -> None:
     allow_union = _as_bool01(args.allow_union)
 
     aoi_path = Path(args.aoi)
-
-    pipeline = BuildSceneCatalogPipeline(aoi_path=aoi_path)
 
     params = BuildSceneCatalogParams(
         date_start=args.date_start,
@@ -122,6 +138,16 @@ def main() -> None:
         window_days=args.window_days,
     )
 
+    # Log parameters with meanings
+    extra = {
+        "mode": cfg.mode,
+        "region": cfg.region_name,
+        "aoi_id": cfg.aoi_id,
+        "aoi_path": str(aoi_path),
+    }
+    log_parameters("BuildSceneCatalog", params, PARAMETER_DOCS, extra)
+
+    pipeline = BuildSceneCatalogPipeline(aoi_path=aoi_path)
     out = pipeline.run(params)
     print(f"[OK] Pipeline returned: {out}")
 

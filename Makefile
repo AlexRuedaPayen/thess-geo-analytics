@@ -45,33 +45,38 @@ help:
 	@echo "  make ndvi-composites       - build NDVI monthly/quarterly composites"
 	@echo "  make timestamps-aggregation - merge all tiles from same timestamp into one (per band)"
 
-# 1. Extract AOI from larger region (optional)
 .PHONY: extract-aoi
 extract-aoi:
-	@echo "[RUN] ExtractAoi for region=$(REGION_NAME)"
-	$(PYTHON) -m thess_geo_analytics.entrypoints.ExtractAoi $(REGION_NAME)
+	@echo 
+	@echo _____________________________________________________________
+	@echo 
+	@echo [RUN] ExtractAoi for region from config"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.ExtractAoi
 
-# 2. Build scene catalog
 .PHONY: scene-catalog
 scene-catalog:
-	@echo "[RUN] BuildSceneCatalog from config (AOI=$(AOI_FILE))"
+	@echo 
+	@echo _____________________________________________________________
+	@echo 
+	@echo [RUN] BuildSceneCatalog from config
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildSceneCatalog
 
-# 3. Build assets manifest
 .PHONY: assets-manifest
 assets-manifest:
-	@echo "[RUN] BuildAssetsManifest (manifest only, light downloads)"
+	@echo 
+	@echo _____________________________________________________________
+	@echo 
+	@echo [RUN] BuildAssetsManifest (manifest only, config-driven)
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildAssetsManifest
 
-# 4. Timestamp aggregation
 .PHONY: timestamps-aggregation
 timestamps-aggregation:
-	@echo "[RUN] BuildAggregatedTimestamps"
+	@echo 
+	@echo _____________________________________________________________
+	@echo 
+	@echo [RUN] BuildAggregatedTimestamps
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildAggregatedTimestamps
 
-# ----------
-# "Full" 
-# ----------
 .PHONY: full
 full: extract-aoi scene-catalog assets-manifest timestamps-aggregation
-	@echo "✓ Data ingestion completed.
+	@echo "✓ Data ingestion completed."

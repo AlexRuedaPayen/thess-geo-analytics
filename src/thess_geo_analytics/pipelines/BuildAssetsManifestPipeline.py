@@ -85,7 +85,7 @@ class BuildAssetsManifestPipeline:
         RepoPaths.TABLES.mkdir(parents=True, exist_ok=True)
         out_path = RepoPaths.table(params.out_name)
 
-        print(f"[OK] Assets manifest created in memory — rows: {len(manifest_df)}")
+        print(f"[OUTPUT] Assets manifest created in memory — rows: {len(manifest_df)}")
         print(f"[INFO] band_resolution={params.band_resolution} m")
 
         missing_hrefs = (
@@ -105,8 +105,8 @@ class BuildAssetsManifestPipeline:
             )
 
         manifest_df.to_csv(out_path, index=False)
-        print(f"[OK] Assets manifest exported → {out_path}")
-        print(f"[OK] Scenes in manifest: {len(manifest_df)}")
+        print(f"[OUTPUT] Assets manifest exported → {out_path}")
+        print(f"[INFO] Scenes in manifest: {len(manifest_df)}")
 
         return out_path
 
