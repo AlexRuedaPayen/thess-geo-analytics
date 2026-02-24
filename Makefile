@@ -43,14 +43,7 @@ help:
 	@echo "  make scene-catalog         - build Sentinel-2 scene catalog"
 	@echo "  make assets-manifest       - build assets_manifest_selected.csv"
 	@echo "  make ndvi-composites       - build NDVI monthly/quarterly composites"
-	@echo "  make ndvi-period-stats     - compute NDVI period stats CSV"
-	@echo "  make ndvi-anomalies        - build NDVI anomaly rasters (if entrypoint exists)"
-	@echo "  make pixel-features        - build pixel_features_7d.tif (if entrypoint exists)"
-	@echo "  make superpixels           - build superpixels rasters (if entrypoint exists)"
-	@echo "  make superpixel-features   - build superpixel_features.csv (if entrypoint exists)"
-	@echo "  make upload-composites     - upload NDVI composites (COGs+PNGs) to GCS"
-	@echo "  make upload-pixel-features - upload pixel_features_7d.tif to GCS"
-	@echo "  make full                  - run only AOI extraction + scene catalog"
+	@echo "  make timestamps-aggregation - merge all tiles from same timestamp into one (per band)"
 
 # 1. Extract AOI from larger region (optional)
 .PHONY: extract-aoi
@@ -76,53 +69,9 @@ timestamps-aggregation:
 	@echo "[RUN] BuildAggregatedTimestamps"
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildAggregatedTimestamps
 
-# 5. Build NDVI monthly/quarterly composites
-.PHONY: ndvi-composites
-ndvi-composites:
-	@echo "[RUN] BuildNdviMonthlyComposite"
-	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviMonthlyComposite \
-		--aoi $(AOI_FILE) \
-		--aoi-id $(AOI_ID) \
-		--time-serie $(SCENES_SELECTED_CSV) \
-		--assets-manifest $(ASSETS_MANIFEST_CSV)
-
-# 5. NDVI period stats (per composite)
-.PHONY: ndvi-period-stats
-ndvi-period-stats:
-	@echo "[RUN] BuildNdviPeriodStats for all periods"
-	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviPeriodStats \
-		--aoi-id $(AOI_ID) \
-		--out $(NDVI_PERIOD_STATS_CSV)
-
-# 6. NDVI anomaly maps (assuming this entrypoint exists)
-.PHONY: ndvi-anomalies
-ndvi-anomalies:
-	@echo "[RUN] BuildNdviAnomalyMaps"
-	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviAnomalyMaps
-
-# 7. Pixel features raster (assuming this entrypoint exists)
-.PHONY: pixel-features
-pixel-features:
-	@echo "[RUN] BuildPixelFeatures"
-	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildPixelFeatures
-
-# 8. Superpixels (assuming this entrypoint exists)
-.PHONY: superpixels
-superpixels:
-	@echo "[RUN] BuildSuperpixels"
-	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildSuperpixels
-
-# 9. Superpixel-level features (assuming this entrypoint exists)
-.PHONY: superpixel-features
-superpixel-features:
-	@echo "[RUN] BuildSuperpixelFeatures"
-	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildSuperpixelFeatures
-
-
-
 # ----------
-# "Full" for now = only AOI + Scene Catalog
+# "Full" 
 # ----------
 .PHONY: full
 full: extract-aoi scene-catalog assets-manifest timestamps-aggregation
-	@echo "✓ AOI extraction + scene catalog completed.
+	@echo "✓ Data ingestion completed.

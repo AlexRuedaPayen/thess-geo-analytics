@@ -105,12 +105,6 @@ ndvi_monthly_composite:
   upload_composites_to_gcs: false
   gcs_prefix_composites: "ndvi/composites"
 
-# ----------------------------------
-# NDVI Period Stats
-# ----------------------------------
-ndvi_period_stats:
-  out_table: "ndvi_period_stats.csv"
-  aoi_id: "el522"
 
 # ----------------------------------
 # Upload defaults (GCS; non-secret)
