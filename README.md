@@ -2,7 +2,7 @@
 A Modular and Scalable Sentinel-2 Processing Pipeline
 
 Developed by: Alex Rueda Payen (Independent Research Project)  
-(Project inspired by applications at CERTH — aiming to demonstrate EO pipeline engineering skills.)
+(Project aiming to demonstrate EO pipeline engineering skills.)
 
 ## Overview
 
@@ -130,6 +130,15 @@ timestamps_aggregation:
   resampling: "nearest"
   nodata: 0.0
   bands: ["B04", "B08", "SCL"]
+
+
+ndvi_composites:
+  min_scenes_per_month: 2
+  fallback_to_quarterly: true
+  upload_to_gcs: false
+  strategy: "monthly"
+  max_scenes_per_period: null
+  cloud_masking: true
 ```
 
 ### User should focus on:
@@ -212,6 +221,13 @@ DATA_LAKE/data_raw/aggregated/<timestamp>/
 ```
 
 ---
+### 5. NDVI Composite
+- Group timestamps by months or quarter if too sparse
+- Performs a mean over all raster pixel that have been rescale to the corsest
+- Compute the NDVI (Non-Differential Vegetation Index):
+
+```
+``
 
 ## 6. Recommended Parameter Guidelines
 
@@ -252,11 +268,13 @@ A typical run produces:
 ### Tables
 - Scene catalog (full & filtered)  
 - Assets manifest  
-- NDVI composite statistics (optional)
+- NDVI composite statistics (to developp):
+
+$\displaystyle \text{NDVI} = \frac{\text{NIR} - \text{RED}}{\text{NIR} + \text{RED}}$
 
 ### Rasters
 - Aggregated mosaics per timestamp  
-- NDVI composite rasters (optional)
+- NDVI composite rasters 
 
 ### Data Lake Structure
 
