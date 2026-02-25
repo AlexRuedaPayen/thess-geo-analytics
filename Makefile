@@ -45,12 +45,12 @@ clean-hard: clean
 .PHONY: help
 help:
 	@echo "Targets:"
-	@echo "  make extract-aoi            - extract AOI geometry for region (ExtractAoiPipeline)"
-	@echo "  make scene-catalog          - build Sentinel-2 scene catalog"
-	@echo "  make assets-manifest        - build assets_manifest_selected.csv"
-	@echo "  make ndvi-composites        - build NDVI monthly/quarterly composites"
-	@echo "  make timestamps-aggregation - merge all tiles from same timestamp into one (per band)"
-	@echo "  make full                   - run full pipeline (AOI → catalog → manifest → aggregation)"
+	@echo "  make extract-aoi                - extract AOI geometry for region (ExtractAoiPipeline)"
+	@echo "  make scene-catalog              - build Sentinel-2 scene catalog"
+	@echo "  make assets-manifest            - build assets_manifest_selected.csv"
+	@echo "  make timestamps-aggregation     - merge all tiles from same timestamp into one (per band)"
+	@echo "  make ndvi-aggregated-composites - build NDVI composites from aggregated timestamps"
+	@echo "  make full                       - run full pipeline (AOI → catalog → manifest → aggregation → NDVI)"
 
 .PHONY: extract-aoi
 extract-aoi:
@@ -80,6 +80,13 @@ timestamps-aggregation:
 	@echo "[RUN] BuildAggregatedTimestamps"
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildAggregatedTimestamps
 
+.PHONY: ndvi-aggregated-composites
+ndvi-aggregated-composites:
+	@echo "_____________________________________________________________"
+	@echo
+	@echo "[RUN] BuildNdviAggregatedComposite (NDVI from aggregated timestamps)"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviAggregatedComposite
+
 .PHONY: full
-full: extract-aoi scene-catalog assets-manifest timestamps-aggregation
-	@echo "✓ Data ingestion completed."
+full: extract-aoi scene-catalog assets-manifest timestamps-aggregation ndvi-aggregated-composites
+	@echo "✓ Data ingestion + NDVI composite pipeline completed."

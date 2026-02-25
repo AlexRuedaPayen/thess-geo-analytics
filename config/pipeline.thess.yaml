@@ -32,3 +32,11 @@ timestamps_aggregation:
   merge_method: "first"
   resampling: "nearest"
   nodata: 0.0
+
+ndvi_composites:
+  min_scenes_per_month: 2
+  fallback_to_quarterly: true
+  upload_to_gcs: false
+  strategy: "monthly"
+  max_scenes_per_period: null
+  cloud_masking: true
