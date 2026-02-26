@@ -13,18 +13,13 @@ endif
 PIPELINE_CONFIG_MODULE := thess_geo_analytics.core.pipeline_config
 
 # ------------------------
-# Config-derived variables
+# Cleaning
 # ------------------------
-
-# AOI_FILE := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.raw['aoi']['file'])")
-# AOI_ID   := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.aoi_id)")
-# REGION_NAME := $(shell $(PYTHON) -c "from $(PIPELINE_CONFIG_MODULE) import load_pipeline_config; cfg = load_pipeline_config(); print(cfg.region_name)")
-
-
 .PHONY: clean
 clean:
 	@echo "[CLEAN] Removing generated output files..."
 	@rm -f outputs/tables/*.csv 2>/dev/null || true
+	@rm -f outputs/tables/*.parquet 2>/dev/null || true
 	@rm -f outputs/cogs/*.tif 2>/dev/null || true
 	@rm -f outputs/png/*.png 2>/dev/null || true
 	@rm -rf outputs/composites 2>/dev/null || true
@@ -50,8 +45,12 @@ help:
 	@echo "  make assets-manifest            - build assets_manifest_selected.csv"
 	@echo "  make timestamps-aggregation     - merge all tiles from same timestamp into one (per band)"
 	@echo "  make ndvi-aggregated-composites - build NDVI composites from aggregated timestamps"
-	@echo "  make full                       - run full pipeline (AOI → catalog → manifest → aggregation → NDVI)"
+	@echo "  make monthly-statistics         - build NDVI period stats + monthly time series + plot"
+	@echo "  make full                       - run full pipeline (AOI → catalog → manifest → aggregation → NDVI → stats)"
 
+# ----------
+# Pipeline steps
+# ----------
 .PHONY: extract-aoi
 extract-aoi:
 	@echo "_____________________________________________________________"
@@ -87,6 +86,16 @@ ndvi-aggregated-composites:
 	@echo "[RUN] BuildNdviAggregatedComposite (NDVI from aggregated timestamps)"
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviAggregatedComposite
 
+.PHONY: monthly-statistics
+monthly-statistics:
+	@echo "_____________________________________________________________"
+	@echo
+	@echo "[RUN] NDVI Monthly Statistics (period stats + time series + plot)"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviMonthlyStatistics
+
+# ----------
+# Full pipeline
+# ----------
 .PHONY: full
-full: extract-aoi scene-catalog assets-manifest timestamps-aggregation ndvi-aggregated-composites
-	@echo "✓ Data ingestion + NDVI composite pipeline completed."
+full: extract-aoi scene-catalog assets-manifest timestamps-aggregation ndvi-aggregated-composites monthly-statistics
+	@echo "✓ Data ingestion + NDVI composites + monthly statistics pipeline completed."
