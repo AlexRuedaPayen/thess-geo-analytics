@@ -93,9 +93,16 @@ monthly-statistics:
 	@echo "[RUN] NDVI Monthly Statistics (period stats + time series + plot)"
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviMonthlyStatistics
 
+.PHONY: ndvi-climatology
+ndvi-climatology:
+	@echo "_____________________________________________________________"
+	@echo
+	@echo "[RUN] BuildNdviClimatology (seasonal NDVI baseline)"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviClimatology
+
 # ----------
 # Full pipeline
 # ----------
 .PHONY: full
-full: extract-aoi scene-catalog assets-manifest timestamps-aggregation ndvi-aggregated-composites monthly-statistics
+full: extract-aoi scene-catalog assets-manifest timestamps-aggregation ndvi-aggregated-composites monthly-statistics ndvi-climatology
 	@echo "✓ Data ingestion + NDVI composites + monthly statistics pipeline completed."
