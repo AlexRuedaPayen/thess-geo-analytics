@@ -100,9 +100,31 @@ ndvi-climatology:
 	@echo "[RUN] BuildNdviClimatology (seasonal NDVI baseline)"
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviClimatology
 
+
+.PHONY: ndvi-anomaly-maps
+ndvi-anomaly-maps:
+	@echo "_____________________________________________________________"
+	@echo
+	@echo "[RUN] BuildNdviAnomalyMaps (pixel-wise NDVI anomalies from monthly composites)"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviAnomalyMaps
+
+.PHONY: ndvi-anomaly-maps
+ndvi-anomaly-maps:
+	@echo "_____________________________________________________________"
+	@echo
+	@echo "[RUN] BuildNdviAnomalyMaps (pixel-wise NDVI anomalies from monthly composites)"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviAnomalyMaps
+
+.PHONY: ndvi-pixel-features
+ndvi-pixel-features:
+	@echo "_____________________________________________________________"
+	@echo
+	@echo "[RUN] BuildPixelFeatures (7D pixelwise temporal NDVI features)"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildPixelFeatures
+
 # ----------
 # Full pipeline
 # ----------
 .PHONY: full
-full: extract-aoi scene-catalog assets-manifest timestamps-aggregation ndvi-aggregated-composites monthly-statistics ndvi-climatology
+full: extract-aoi scene-catalog assets-manifest timestamps-aggregation ndvi-aggregated-composites monthly-statistics ndvi-climatology ndvi-anomaly-maps ndvi-pixel-features
 	@echo "✓ Data ingestion + NDVI composites + monthly statistics pipeline completed."

@@ -1,10 +1,12 @@
 from __future__ import annotations
-import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
+
+import warnings
+
+import numpy as np
 import rasterio
-from rasterio.enums import Resampling
 from scipy.stats import skew
 
 
@@ -18,6 +20,7 @@ class NdviFeatureExtractorConfig:
 class NdviFeatureExtractor:
     """
     Computes 7D temporal features from a stack of NDVI rasters:
+
       F1 = trend_slope
       F2 = seasonal_std
       F3 = min_anomaly
@@ -31,7 +34,7 @@ class NdviFeatureExtractor:
         self.cfg = cfg or NdviFeatureExtractorConfig()
 
     # -------------------------------------------------------------------
-    # Public API
+    # Public API – convenient wrapper if you want to pass COG paths
     # -------------------------------------------------------------------
     def compute_features_from_cogs(
         self,
@@ -50,65 +53,85 @@ class NdviFeatureExtractor:
         return features, meta
 
     # -------------------------------------------------------------------
-    # Core feature computation
+    # Core feature computation (called by BuildPixelFeaturesPipeline)
     # -------------------------------------------------------------------
     def compute_features(
         self,
         stack: np.ndarray,               # shape (T, H, W)
         timestamps: List[np.datetime64], # length T
     ) -> np.ndarray:
+        """
+        Compute the 7D feature vector per pixel from a (T, H, W) anomaly stack.
+        """
         T, H, W = stack.shape
         cfg = self.cfg
 
         nd = stack.astype("float32")  # ensure float operations
         nd[nd == cfg.nodata] = np.nan
 
-        # ---- 1. Trend slope (linear regression vs time index) ----
-        t = np.arange(T, dtype=np.float32)
-        t_mean = t.mean()
-        t_var = ((t - t_mean) ** 2).sum()
+        # If the entire tile is NaN, bail out early to avoid spurious warnings
+        if not np.isfinite(nd).any():
+            return np.full((H, W, 7), np.nan, dtype=np.float32)
 
-        # Covariance time × NDVI
-        cov = np.nansum((t[:, None, None] - t_mean) * (nd - np.nanmean(nd, axis=0)), axis=0)
-        slope = cov / t_var
+        # Silence numpy / scipy warnings inside this computation.
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore")
 
-        # ---- 2. seasonal_std (std of monthly anomalies)
-        # Compute monthly mean NDVI then anomaly = NDVI - monthly_mean
-        months = np.array([int(str(ts)[5:7]) for ts in timestamps])
-        monthly_means = np.zeros((12, H, W), dtype=np.float32)
+            # ---- 1. Trend slope (linear regression vs time index) ----
+            t = np.arange(T, dtype=np.float32)
+            t_mean = t.mean()
+            t_var = ((t - t_mean) ** 2).sum()
 
-        for m in range(1, 13):
-            mask_m = (months == m)
-            if mask_m.any():
-                monthly_means[m - 1] = np.nanmean(nd[mask_m], axis=0)
+            # Mean over time per pixel
+            nd_mean = np.nanmean(nd, axis=0)  # (H, W)
+
+            # Covariance time × NDVI
+            cov = np.nansum((t[:, None, None] - t_mean) * (nd - nd_mean), axis=0)  # (H, W)
+            slope = cov / t_var  # (H, W)
+
+            # ---- 2. seasonal_std (std of monthly anomalies) ----
+            # Compute monthly mean NDVI then anomaly = NDVI - monthly_mean
+            months = np.array([int(str(ts)[5:7]) for ts in timestamps])
+            monthly_means = np.zeros((12, H, W), dtype=np.float32)
+
+            for m in range(1, 13):
+                mask_m = (months == m)
+                if mask_m.any():
+                    monthly_means[m - 1] = np.nanmean(nd[mask_m], axis=0)
+                else:
+                    monthly_means[m - 1] = np.nan
+
+            anomaly = nd - monthly_means[months - 1]  # (T, H, W)
+            seasonal_std = np.nanstd(anomaly, axis=0)  # (H, W)
+
+            # ---- 3. min_anomaly ----
+            min_anomaly = np.nanmin(anomaly, axis=0)  # (H, W)
+
+            # ---- 4. recovery_ratio ----
+            yrs = cfg.years_for_recovery
+            months_per_year = 12
+            # Use min(T, yrs * 12) to avoid weirdness with very short series
+            N_last = min(T, yrs * months_per_year)
+
+            if N_last == 0:
+                nd_mean_first = np.nan * np.ones_like(nd_mean)
+                nd_mean_last = np.nan * np.ones_like(nd_mean)
             else:
-                monthly_means[m - 1] = np.nan
+                nd_mean_first = np.nanmean(nd[:N_last], axis=0)
+                nd_mean_last = np.nanmean(nd[-N_last:], axis=0)
 
-        anomaly = nd - monthly_means[months - 1]
-        seasonal_std = np.nanstd(anomaly, axis=0)
+            recovery_ratio = nd_mean_last / nd_mean_first  # (H, W)
 
-        # ---- 3. min_anomaly
-        min_anomaly = np.nanmin(anomaly, axis=0)
+            # ---- 5. anomaly_persistence ----
+            anomaly_persistence = np.sum(anomaly < cfg.anomaly_threshold, axis=0)  # (H, W)
 
-        # ---- 4. recovery_ratio
-        yrs = cfg.years_for_recovery
-        months_per_year = 12
-        N_last = yrs * months_per_year
+            # ---- 6. ndvi_variance ----
+            ndvi_variance = np.nanvar(nd, axis=0)  # (H, W)
 
-        nd_mean_first = np.nanmean(nd[:N_last], axis=0)
-        nd_mean_last = np.nanmean(nd[-N_last:], axis=0)
-        recovery_ratio = nd_mean_last / nd_mean_first
+            # ---- 7. ndvi_skew ----
+            ndvi_skew = skew(nd, axis=0, nan_policy="omit")  # (H, W)
 
-        # ---- 5. anomaly_persistence
-        anomaly_persistence = np.sum(anomaly < cfg.anomaly_threshold, axis=0)
-
-        # ---- 6. ndvi_variance
-        ndvi_variance = np.nanvar(nd, axis=0)
-
-        # ---- 7. ndvi_skew
-        ndvi_skew = skew(nd, axis=0, nan_policy="omit")
-
-        # ---- combine features (H,W,7)
+        # ---- combine features → (H, W, 7) ----
         feats = np.stack(
             [
                 slope,
@@ -138,9 +161,8 @@ class NdviFeatureExtractor:
                 arr = ds.read(1).astype("float32")
                 arrs.append(arr)
 
-        stack = np.stack(arrs, axis=0)  # (T,H,W)
+        stack = np.stack(arrs, axis=0)  # (T, H, W)
         return stack, meta
-    
 
     # -------------------------
     # Smoke test
@@ -154,12 +176,7 @@ class NdviFeatureExtractor:
           Pixel A: decreasing NDVI      → negative slope
           Pixel B: oscillating NDVI     → high seasonal_std
           Pixel C: recovering NDVI      → positive slope, high recovery_ratio
-
-        Prints the extracted 7D feature vectors for visual inspection.
         """
-        import numpy as np
-        from datetime import datetime
-
         print("=== NdviFeatureExtractor Smoke Test ===")
 
         cfg = NdviFeatureExtractorConfig()
@@ -180,14 +197,13 @@ class NdviFeatureExtractor:
         # Build (T, H, W) array
         stack = np.stack([pix_A, pix_B, pix_C], axis=1).reshape(T, H, W)
 
-        # Fake timestamps
         # Fake monthly timestamps using NumPy only
         timestamps = np.array([
             np.datetime64("2020-01") + np.timedelta64(i, "M")
             for i in range(T)
         ])
 
-        feats = extractor.compute_features(stack, timestamps)  # (1,3,7)
+        feats = extractor.compute_features(stack, timestamps)  # (1, 3, 7)
 
         labels = [
             "trend_slope",
