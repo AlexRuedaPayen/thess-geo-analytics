@@ -2,32 +2,56 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
-      - master
-      - 'feature/*'
+    branches: [ main, master ]
   pull_request:
 
 jobs:
-  lint-and-meta:
+  lint-and-tests:
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.11"]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
-      - name: Install base dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          # install your package in editable mode
           pip install -e .
 
+      # ---------- LINT ----------
       - name: Lint with flake8
         run: |
           pip install flake8
-          flake8 thess_geo_analytics tests
+          # NOTE: src/thess_geo_analytics (not thess_geo_analytics) to avoid E902
+          flake8 src/thess_geo_analytics tests
+
+      # ---------- TEST DATA ----------
+      - name: Generate scene catalog test data
+        run: |
+          python -m tests.fixtures.generators.SceneCatalogTestDataGenerator
+
+      # ---------- UNIT TESTS ----------
+      - name: Run unit tests
+        run: |
+          python -m unittest discover -s tests/auto/unit -v
+
+      # ---------- ARTIFACTS ----------
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-${{ matrix.python-version }}
+          path: |
+            tests/fixtures/generated/scene_catalog/
+            tests/artifacts/
