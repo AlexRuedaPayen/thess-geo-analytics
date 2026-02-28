@@ -20,7 +20,6 @@ from thess_geo_analytics.utils.RepoPaths import RepoPaths
 #   Supports:
 #     ndvi_anomaly_YYYY-MM_<aoi>.tif
 #     ndvi_anomaly_YYYY-QN_<aoi>.tif
-# (plain ndvi_ and climatology* will be filtered out earlier)
 # -------------------------------------------------------------------
 _COG_LABEL_RE = re.compile(
     r"ndvi_anomaly_(\d{4})-(\d{2}|Q[1-4])_",
@@ -62,7 +61,6 @@ class BuildPixelFeaturesParams:
     pattern: str = "ndvi_anomaly_*.tif"
 
     # Optional: filter by AOI suffix in filename (e.g. "_el522.tif")
-    # If None, accept any AOI.
     aoi_id: str | None = None
 
     # Output 7-band GeoTIFF
@@ -75,6 +73,9 @@ class BuildPixelFeaturesParams:
     tile_height: int = 512
     tile_width: int = 512
 
+    # Kept for backward compatibility but ignored (we always run serial)
+    tile_workers: int | None = None
+
 
 class BuildPixelFeaturesPipeline:
     def run(self, params: BuildPixelFeaturesParams) -> Path:
@@ -83,7 +84,6 @@ class BuildPixelFeaturesPipeline:
         def log_step(step: str, status: str, message: str = "", **extra) -> None:
             row = {"step": step, "status": status, "message": message}
             for k, v in extra.items():
-                # Make sure values are JSON/CSV-friendly
                 if isinstance(v, Path):
                     row[k] = str(v)
                 elif isinstance(v, np.generic):
@@ -98,7 +98,7 @@ class BuildPixelFeaturesPipeline:
 
         try:
             # --------------------------------------------------------
-            # 1. Find anomaly COGs
+            # 1. Discover anomaly COGs
             # --------------------------------------------------------
             log_step(
                 "discover_cogs",
@@ -118,16 +118,15 @@ class BuildPixelFeaturesPipeline:
             for p in all_paths:
                 name = p.name.lower()
 
-                # hard filter out climatology / baseline if pattern ever becomes too broad
+                # Filter out climatology / median if pattern is broad
                 if "climatology" in name or "median" in name:
                     continue
 
                 if not _COG_LABEL_RE.search(p.name):
-                    # This catches plain ndvi_YYYY-MM_*.tif etc.
+                    # Guards against plain ndvi_YYYY-MM_*.tif
                     continue
 
                 if params.aoi_id is not None:
-                    # Enforce AOI-specific suffix if requested
                     if not name.endswith(f"_{params.aoi_id.lower()}.tif"):
                         continue
 
@@ -151,7 +150,7 @@ class BuildPixelFeaturesPipeline:
             )
 
             # --------------------------------------------------------
-            # 2. Build timestamps from anomaly filenames
+            # 2. Parse timestamps from filenames and sort
             # --------------------------------------------------------
             timestamps = [parse_cog_timestamp(p) for p in cog_paths]
             timestamps = np.array(timestamps)
@@ -190,9 +189,9 @@ class BuildPixelFeaturesPipeline:
             )
 
             # --------------------------------------------------------
-            # 4. Prepare output 7-band GeoTIFF
+            # 4. Prepare output 7-band GeoTIFF (safe tiling)
             # --------------------------------------------------------
-            out_nodata = -9999.0  # keep a finite nodata for rasters
+            out_nodata = -9999.0
             out_profile = profile.copy()
             out_profile.update(
                 driver="GTiff",
@@ -200,8 +199,20 @@ class BuildPixelFeaturesPipeline:
                 dtype="float32",
                 nodata=out_nodata,
                 compress="deflate",
-                tiled=True,
             )
+
+            # Safe tiling: only enable tiled output if both dims >= 16
+            if height >= 16 and width >= 16:
+                out_profile.update(
+                    tiled=True,
+                    blockxsize=16,
+                    blockysize=16,
+                )
+            else:
+                # for tiny rasters just use strip-based layout
+                out_profile.pop("tiled", None)
+                out_profile.pop("blockxsize", None)
+                out_profile.pop("blockysize", None)
 
             out_path = params.out_path
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -212,12 +223,18 @@ class BuildPixelFeaturesPipeline:
                 "Output profile prepared.",
                 out_path=str(out_path),
                 out_nodata=out_nodata,
+                tiled=bool(out_profile.get("tiled", False)),
+                blockxsize=int(out_profile.get("blockxsize", 0) or 0),
+                blockysize=int(out_profile.get("blockysize", 0) or 0),
             )
 
             extractor = NdviFeatureExtractor()
 
-            # Open inputs once
+            # --------------------------------------------------------
+            # 5. Open all input COGs once
+            # --------------------------------------------------------
             srcs = [rasterio.open(p) for p in cog_paths]
+
             try:
                 tile_h = params.tile_height
                 tile_w = params.tile_width
@@ -225,9 +242,6 @@ class BuildPixelFeaturesPipeline:
                 n_tiles_y = math.ceil(height / tile_h)
                 n_tiles_x = math.ceil(width / tile_w)
                 total_tiles = n_tiles_y * n_tiles_x
-
-                empty_tiles = 0
-                tiles_processed = 0
 
                 log_step(
                     "tiling",
@@ -239,6 +253,13 @@ class BuildPixelFeaturesPipeline:
                     n_tiles_x=n_tiles_x,
                     total_tiles=total_tiles,
                 )
+
+                # We run **serially** by design for robustness.
+                print("[INFO] Using serial tile processing (tile_workers=1 for stability).")
+                print(f"[INFO] Starting tiled feature computation on {total_tiles} tiles…")
+
+                tiles_processed = 0
+                empty_tiles = 0
 
                 with rasterio.open(out_path, "w", **out_profile) as dst:
                     with tqdm(total=total_tiles, desc="Pixel features", unit="tile") as pbar:
@@ -252,7 +273,6 @@ class BuildPixelFeaturesPipeline:
 
                                 window = Window(col_off, row_off, w, h)
 
-                                # Stack anomalies for this tile: (T, h, w)
                                 T = len(srcs)
                                 stack = np.empty((T, h, w), dtype=np.float32)
 
@@ -262,21 +282,19 @@ class BuildPixelFeaturesPipeline:
                                         arr[arr == nodata_in] = np.nan
                                     stack[t_idx] = arr
 
-                                valid_in_tile = np.isfinite(stack).sum()
                                 tiles_processed += 1
+                                valid_in_tile = np.isfinite(stack).sum()
 
                                 if valid_in_tile == 0:
-                                    # Entire tile is nodata → just fill with nodata
                                     empty_tiles += 1
-                                    feats_tile = np.full(
-                                        (h, w, 7), np.nan, dtype=np.float32
-                                    )
+                                    feats_tile = np.full((h, w, 7), np.nan, dtype=np.float32)
                                 else:
                                     feats_tile = extractor.compute_features(stack, timestamps)
 
-                                # Convert NaNs → out_nodata before writing
+                                # NaNs → nodata for disk
                                 feats_tile = np.where(np.isnan(feats_tile), out_nodata, feats_tile)
 
+                                # Write 7 bands
                                 for band_idx in range(7):
                                     dst.write(
                                         feats_tile[:, :, band_idx].astype(np.float32),
@@ -307,6 +325,9 @@ class BuildPixelFeaturesPipeline:
             )
 
             print(f"[OK] Pixel anomaly features written → {out_path}")
+
+            # Normal completion → flush diagnostics
+            flush_diagnostics()
             return out_path
 
         except Exception as e:
@@ -314,7 +335,3 @@ class BuildPixelFeaturesPipeline:
             log_step("pipeline", "error", f"{type(e).__name__}: {e}")
             flush_diagnostics()
             raise
-
-        else:
-            # Normal completion
-            flush_diagnostics()

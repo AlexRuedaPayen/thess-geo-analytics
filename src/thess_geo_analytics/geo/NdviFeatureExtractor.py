@@ -1,3 +1,5 @@
+# src/thess_geo_analytics/geo/NdviFeatureExtractor.py
+
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +10,12 @@ import warnings
 import numpy as np
 import rasterio
 from scipy.stats import skew
+
+# Try to import SciPy's SmallSampleWarning (internal API, so guarded).
+try:
+    from scipy.stats._stats_py import SmallSampleWarning  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    SmallSampleWarning = None
 
 
 @dataclass
@@ -69,67 +77,93 @@ class NdviFeatureExtractor:
         nd = stack.astype("float32")  # ensure float operations
         nd[nd == cfg.nodata] = np.nan
 
-        # If the entire tile is NaN, bail out early to avoid spurious warnings
+        # If the entire tile is NaN, bail out early
         if not np.isfinite(nd).any():
             return np.full((H, W, 7), np.nan, dtype=np.float32)
 
-        # Silence numpy / scipy warnings inside this computation.
-        with np.errstate(all="ignore"), warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        # Suppress only numerical RuntimeWarnings and SciPy's SmallSampleWarning
+        # INSIDE this function.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+            if SmallSampleWarning is not None:
+                warnings.filterwarnings("ignore", category=SmallSampleWarning)
 
-            # ---- 1. Trend slope (linear regression vs time index) ----
-            t = np.arange(T, dtype=np.float32)
-            t_mean = t.mean()
-            t_var = ((t - t_mean) ** 2).sum()
+            with np.errstate(all="ignore"):
+                # ---- 1. Trend slope (linear regression vs time index) ----
+                t = np.arange(T, dtype=np.float32)
+                t_mean = t.mean()
+                t_var = ((t - t_mean) ** 2).sum()
 
-            # Mean over time per pixel
-            nd_mean = np.nanmean(nd, axis=0)  # (H, W)
+                # Mean over time per pixel
+                nd_mean = np.nanmean(nd, axis=0)  # (H, W)
 
-            # Covariance time × NDVI
-            cov = np.nansum((t[:, None, None] - t_mean) * (nd - nd_mean), axis=0)  # (H, W)
-            slope = cov / t_var  # (H, W)
+                # Covariance time × NDVI
+                cov = np.nansum(
+                    (t[:, None, None] - t_mean) * (nd - nd_mean),
+                    axis=0,
+                )  # (H, W)
+                slope = cov / t_var  # (H, W)
 
-            # ---- 2. seasonal_std (std of monthly anomalies) ----
-            # Compute monthly mean NDVI then anomaly = NDVI - monthly_mean
-            months = np.array([int(str(ts)[5:7]) for ts in timestamps])
-            monthly_means = np.zeros((12, H, W), dtype=np.float32)
+                # ---- 2. seasonal_std (std of monthly anomalies) ----
+                months = np.array([int(str(ts)[5:7]) for ts in timestamps])
+                monthly_means = np.zeros((12, H, W), dtype=np.float32)
 
-            for m in range(1, 13):
-                mask_m = (months == m)
-                if mask_m.any():
-                    monthly_means[m - 1] = np.nanmean(nd[mask_m], axis=0)
+                for m in range(1, 13):
+                    mask_m = (months == m)
+                    if mask_m.any():
+                        monthly_means[m - 1] = np.nanmean(nd[mask_m], axis=0)
+                    else:
+                        monthly_means[m - 1] = np.nan
+
+                anomaly = nd - monthly_means[months - 1]  # (T, H, W)
+                seasonal_std = np.nanstd(anomaly, axis=0)  # (H, W)
+
+                # ---- 3. min_anomaly ----
+                min_anomaly = np.nanmin(anomaly, axis=0)  # (H, W)
+
+                # ---- 4. recovery_ratio ----
+                yrs = cfg.years_for_recovery
+
+                if T < 4:
+                    # Too short for any meaningful recovery metric
+                    nd_mean_first = np.nan * np.ones_like(nd_mean)
+                    nd_mean_last = np.nan * np.ones_like(nd_mean)
                 else:
-                    monthly_means[m - 1] = np.nan
+                    # Approximate observations per year from the timestamps
+                    total_days = float(
+                        (timestamps[-1] - timestamps[0]) / np.timedelta64(1, "D")
+                    ) + 1.0
 
-            anomaly = nd - monthly_means[months - 1]  # (T, H, W)
-            seasonal_std = np.nanstd(anomaly, axis=0)  # (H, W)
+                    if total_days <= 0:
+                        # degenerate case: all timestamps equal
+                        obs_per_year = T
+                    else:
+                        obs_per_year = max(1, int(round(T * 365.25 / total_days)))
 
-            # ---- 3. min_anomaly ----
-            min_anomaly = np.nanmin(anomaly, axis=0)  # (H, W)
+                    # Window in "observations" for the early/late mean
+                    max_window = T // 2  # no overlap
+                    desired_window = yrs * obs_per_year
+                    window = max(1, min(max_window, desired_window))
 
-            # ---- 4. recovery_ratio ----
-            yrs = cfg.years_for_recovery
-            months_per_year = 12
-            # Use min(T, yrs * 12) to avoid weirdness with very short series
-            N_last = min(T, yrs * months_per_year)
+                    early_slice = slice(0, window)
+                    late_slice = slice(T - window, T)
 
-            if N_last == 0:
-                nd_mean_first = np.nan * np.ones_like(nd_mean)
-                nd_mean_last = np.nan * np.ones_like(nd_mean)
-            else:
-                nd_mean_first = np.nanmean(nd[:N_last], axis=0)
-                nd_mean_last = np.nanmean(nd[-N_last:], axis=0)
+                    nd_mean_first = np.nanmean(nd[early_slice], axis=0)
+                    nd_mean_last = np.nanmean(nd[late_slice], axis=0)
 
-            recovery_ratio = nd_mean_last / nd_mean_first  # (H, W)
+                recovery_ratio = nd_mean_last / nd_mean_first  # (H, W)
 
-            # ---- 5. anomaly_persistence ----
-            anomaly_persistence = np.sum(anomaly < cfg.anomaly_threshold, axis=0)  # (H, W)
+                # ---- 5. anomaly_persistence ----
+                anomaly_persistence = np.sum(
+                    anomaly < cfg.anomaly_threshold,
+                    axis=0,
+                )  # (H, W)
 
-            # ---- 6. ndvi_variance ----
-            ndvi_variance = np.nanvar(nd, axis=0)  # (H, W)
+                # ---- 6. ndvi_variance ----
+                ndvi_variance = np.nanvar(nd, axis=0)  # (H, W)
 
-            # ---- 7. ndvi_skew ----
-            ndvi_skew = skew(nd, axis=0, nan_policy="omit")  # (H, W)
+                # ---- 7. ndvi_skew ----
+                ndvi_skew = skew(nd, axis=0, nan_policy="omit")  # (H, W)
 
         # ---- combine features → (H, W, 7) ----
         feats = np.stack(
@@ -198,10 +232,9 @@ class NdviFeatureExtractor:
         stack = np.stack([pix_A, pix_B, pix_C], axis=1).reshape(T, H, W)
 
         # Fake monthly timestamps using NumPy only
-        timestamps = np.array([
-            np.datetime64("2020-01") + np.timedelta64(i, "M")
-            for i in range(T)
-        ])
+        timestamps = np.array(
+            [np.datetime64("2020-01") + np.timedelta64(i, "M") for i in range(T)]
+        )
 
         feats = extractor.compute_features(stack, timestamps)  # (1, 3, 7)
 
