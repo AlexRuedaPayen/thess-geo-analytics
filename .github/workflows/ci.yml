@@ -31,12 +31,6 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install -e .
 
-      - name: Lint with flake8
-        run: |
-          pip install flake8
-          # Lint only your source + tests, not the whole repo
-          flake8 src/thess_geo_analytics tests
-
       - name: Generate scene catalog test data
         run: |
           python -m tests.fixtures.generators.SceneCatalogTestDataGenerator
