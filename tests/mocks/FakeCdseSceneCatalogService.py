@@ -17,11 +17,10 @@ class FakeCdseSceneCatalogService:
     Reusable test double for CdseSceneCatalogService.
 
     Behaves like a real STAC client at a high level:
-      - search_items() applies date range + cloud_cover_max filter
+      - search_items() applies date range + cloud_cover_max + max_items
       - items_to_dataframe() returns a realistic catalog DataFrame
 
-    Used across unit tests of the scene catalog pipeline
-    and asset-manifest pipeline.
+    Used in BuildSceneCatalogPipeline tests to avoid hitting CDSE.
     """
 
     def __init__(self, items: List[Dict[str, Any]]) -> None:
@@ -37,7 +36,7 @@ class FakeCdseSceneCatalogService:
         date_end: str,
         params: StacQueryParams,
     ) -> Tuple[List[Any], Dict[str, Any]]:
-        # Load AOI geometry
+        # Load AOI geometry to echo back to the pipeline
         with aoi_geojson_path.open("r", encoding="utf-8") as f:
             aoi_fc = json.load(f)
         aoi_geom = aoi_fc["features"][0]["geometry"]
@@ -45,6 +44,7 @@ class FakeCdseSceneCatalogService:
         start = date.fromisoformat(date_start)
         end = date.fromisoformat(date_end)
         max_cloud = getattr(params, "cloud_cover_max", None)
+        max_items = getattr(params, "max_items", None)
 
         filtered: List[Dict[str, Any]] = []
         for it in self._items:
@@ -59,7 +59,7 @@ class FakeCdseSceneCatalogService:
             if dt < start or dt > end:
                 continue
 
-            # Cloud
+            # Cloud cover
             cc_val = props.get("cloud_cover", None)
             try:
                 cc_val = float(cc_val)
@@ -70,6 +70,24 @@ class FakeCdseSceneCatalogService:
                 continue
 
             filtered.append(it)
+
+        # Sort like a real STAC client might do:
+        # first by datetime, then by cloud_cover ascending
+        def _sort_key(item: Dict[str, Any]):
+            props = item.get("properties", {}) or {}
+            dt = pd.to_datetime(props.get("datetime"), utc=True)
+            cc = props.get("cloud_cover", None)
+            try:
+                cc_val = float(cc)
+            except Exception:
+                cc_val = float("inf")
+            return (dt, cc_val)
+
+        filtered.sort(key=_sort_key)
+
+        # Apply max_items if provided
+        if max_items is not None:
+            filtered = filtered[: max_items]
 
         return filtered, aoi_geom
 

@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches:
+      - main
+      - master
+      - 'feature/*'
   pull_request:
 
 jobs:
@@ -24,18 +27,7 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install -e .
 
-      # -------------------------------
-      # Lint (optional but recommended)
-      # -------------------------------
       - name: Lint with flake8
         run: |
           pip install flake8
           flake8 thess_geo_analytics tests
-
-      # -------------------------------
-      # Type-check (optional, if you want)
-      # -------------------------------
-      # - name: Type-check with mypy
-      #   run: |
-      #     pip install mypy
-      #     mypy thess_geo_analytics
