@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-# System deps for GDAL / Rasterio / PROJ
+# System deps for GDAL / Rasterio / PROJ + make + bash
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gdal-bin \
     libgdal-dev \
@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     proj-data \
     build-essential \
     make \
+    bash \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CPLUS_INCLUDE_PATH=/usr/include/gdal \
@@ -38,13 +39,14 @@ FROM python:3.11-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Runtime libs for GDAL / Rasterio
+# Runtime libs for GDAL / Rasterio + make + bash
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gdal-bin \
     libgdal-dev \
     proj-bin \
     proj-data \
     make \
+    bash \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user
@@ -74,5 +76,9 @@ ARG THESS_GEO_ANALYTICS_VERSION="0.1.0"
 LABEL org.opencontainers.image.title="Thess Geo Analytics" \
       org.opencontainers.image.version="${THESS_GEO_ANALYTICS_VERSION}"
 
-ENTRYPOINT ["make"]
-CMD ["full"]
+# ----------------
+# Interactive CLI
+# ----------------
+
+ENTRYPOINT ["/bin/bash", "-lc"]
+CMD ["bash"]

@@ -28,18 +28,18 @@ class BuildNdviMonthlyStatisticsParams:
     This pipeline does two things in one pass:
 
       1) Computes per-period NDVI stats for every composite in:
-         outputs/cogs/ndvi_<period>_<aoi_id>.tif
+         <cogs_dir>/ndvi_<period>_<aoi_id>.tif
          where <period> is YYYY-MM or YYYY-Qn.
 
-         → writes outputs/tables/ndvi_period_stats.csv
+         → writes ndvi_period_stats.csv
 
       2) Builds a continuous NDVI time series (monthly) with optional
          fallback to quarterly stats for missing months, and plots it.
 
          → writes:
-              - outputs/tables/nvdi_timeseries.parquet        (legacy spelling)
-              - outputs/tables/ndvi_timeseries.parquet        (canonical)
-              - outputs/figures/ndvi_timeseries.png
+              - nvdi_timeseries.parquet        (legacy spelling)
+              - ndvi_timeseries.parquet        (canonical)
+              - ndvi_timeseries.png
     """
     aoi_id: str = "el522"
 
@@ -102,13 +102,25 @@ class BuildNdviMonthlyStatisticsPipeline:
         print("✓ Smoke test OK (orchestration only, no data checked).")
 
     # -----------------------
+    # Internal helpers
+    # -----------------------
+    @staticmethod
+    def _cogs_dir() -> Path:
+        """
+        Single place to determine where NDVI composites live.
+
+        Tests can override this by monkeypatching RepoPaths or this helper.
+        """
+        return RepoPaths.OUTPUTS / "cogs"
+
+    # -----------------------
     # Step 1: period stats
     # -----------------------
     def _build_period_stats_for_all_existing(
         self,
         params: BuildNdviMonthlyStatisticsParams,
     ) -> pd.DataFrame:
-        cogs_dir = RepoPaths.OUTPUTS / "cogs"
+        cogs_dir = self._cogs_dir()
         cogs_dir.mkdir(parents=True, exist_ok=True)
 
         tifs = sorted(cogs_dir.glob(f"ndvi_*_{params.aoi_id}.tif"))
@@ -358,7 +370,3 @@ class BuildNdviMonthlyStatisticsPipeline:
         fig.tight_layout()
         fig.savefig(out_path, dpi=200)
         plt.close(fig)
-
-
-if __name__ == "__main__":
-    BuildNdviMonthlyStatisticsPipeline.smoke_test()

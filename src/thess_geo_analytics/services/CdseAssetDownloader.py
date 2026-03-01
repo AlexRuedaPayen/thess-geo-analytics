@@ -14,22 +14,40 @@ class CdseAssetDownloader:
     def __init__(self, token_service: CdseTokenService) -> None:
         self.token_service = token_service
 
+    def _do_download(self, href: str, out_path: Path, token: str) -> requests.Response:
+        headers = {"Authorization": f"Bearer {token}"}
+        if VERBOSE:
+            print(f"[DL] {href} -> {out_path}")
+        return requests.get(
+            href,
+            headers=headers,
+            stream=True,
+            timeout=CDSE_DOWNLOAD_TIMEOUT,
+        )
+
     def download(self, href: str, out_path: Path) -> Path:
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # First attempt with current/auto-refreshed token
         token = self.token_service.get_token()
-        headers = {"Authorization": f"Bearer {token}"}
+        r = self._do_download(href, out_path, token)
 
-        if VERBOSE:
-            print(f"[DL] {href} -> {out_path}")
+        # If unauthorized, refresh token once and retry
+        if r.status_code == 401:
+            if VERBOSE:
+                print("[WARN] 401 Unauthorized. Refreshing token and retrying once...")
+            r.close()
+            token = self.token_service.get_token(force_refresh=True)
+            r = self._do_download(href, out_path, token)
 
-        with requests.get(href, headers=headers, stream=True, timeout=CDSE_DOWNLOAD_TIMEOUT) as r:
-            r.raise_for_status()
-            with open(out_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
+        r.raise_for_status()
 
+        with open(out_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+
+        r.close()
         return out_path
 
     @staticmethod

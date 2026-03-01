@@ -29,8 +29,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Build NDVI monthly statistics: per-period stats + time series + plot."
     )
-    # Example for future:
-    # p.add_argument("--verbose", action="store_true", help="Enable verbose logging.")
     return p.parse_args(argv)
 
 
@@ -43,7 +41,8 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     params = BuildNdviMonthlyStatisticsParams(
         aoi_id=aoi_id,
-        stats_csv=RepoPaths.table("ndvi_period_stats.csv"),
+        # Use the configured stats CSV path from pipeline_config
+        stats_csv=cfg.ndvi_period_stats_csv,
         out_parquet=RepoPaths.table("nvdi_timeseries.parquet"),
         out_parquet_canonical=RepoPaths.table("ndvi_timeseries.parquet"),
         out_fig=RepoPaths.figure("ndvi_timeseries.png"),
