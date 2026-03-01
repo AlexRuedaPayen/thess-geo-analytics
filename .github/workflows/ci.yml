@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - master
-      - 'feature/**'   
+      - 'feature/**'
   pull_request:
 
 jobs:
@@ -47,3 +47,38 @@ jobs:
           path: |
             tests/fixtures/generated/scene_catalog/
             tests/artifacts/
+
+  docker-build:
+    needs: lint-and-tests
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read version from src/thess_geo_analytics/__init__.py
+        id: version
+        run: |
+          VERSION=$(grep -Po "__version__\s*=\s*['\"]\K[^'\"]+" src/thess_geo_analytics/__init__.py)
+          if [ -z "$VERSION" ]; then
+            echo "Could not find __version__ in src/thess_geo_analytics/__init__.py"
+            exit 1
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Show version
+        run: echo "Building Docker image version ${{ steps.version.outputs.value }}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: |
+            thess-geo-analytics:${{ steps.version.outputs.value }}
+          build-args: |
+            THESS_GEO_ANALYTICS_VERSION=${{ steps.version.outputs.value }}
