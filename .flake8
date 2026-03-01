@@ -1,0 +1,10 @@
+[flake8]
+max-line-length = 120
+
+# We ignore mostly-cosmetic stuff so CI focuses on real issues:
+# - E501: line too long
+# - W292: no newline at end of file
+# - E221: multiple spaces before operator
+# - W291: trailing whitespace
+# - E303: too many blank lines
+extend-ignore = E501, W292, E221, W291, E303

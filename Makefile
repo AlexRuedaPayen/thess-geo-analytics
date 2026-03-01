@@ -34,6 +34,17 @@ clean-hard: clean
 	@rm -rf cache/nuts 2>/dev/null || true
 	@echo "[CLEAN HARD] All cached data removed."
 
+# Data lake step-specific cleans
+.PHONY: clean-cache-s2
+clean-cache-s2:
+	@echo "[CLEAN] Removing Sentinel-2 cache (DATA_LAKE/cache/s2)..."
+	@rm -rf DATA_LAKE/cache/s2 2>/dev/null || true
+
+.PHONY: clean-aggregated-raw
+clean-aggregated-raw:
+	@echo "[CLEAN] Removing aggregated raw rasters (DATA_LAKE/data_raw/aggregated)..."
+	@rm -rf DATA_LAKE/data_raw/aggregated 2>/dev/null || true
+
 # ----------
 # Help
 # ----------
@@ -46,7 +57,7 @@ help:
 	@echo "  make timestamps-aggregation     - merge all tiles from same timestamp into one (per band)"
 	@echo "  make ndvi-aggregated-composites - build NDVI composites from aggregated timestamps"
 	@echo "  make monthly-statistics         - build NDVI period stats + monthly time series + plot"
-	@echo "  make full                       - run full pipeline (AOI → catalog → manifest → aggregation → NDVI → stats)"
+	@echo "  make full                       - run full pipeline (with step-wise cleanup)"
 
 # ----------
 # Pipeline steps
@@ -100,9 +111,67 @@ ndvi-climatology:
 	@echo "[RUN] BuildNdviClimatology (seasonal NDVI baseline)"
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviClimatology
 
+.PHONY: ndvi-anomaly-maps
+ndvi-anomaly-maps:
+	@echo "_____________________________________________________________"
+	@echo
+	@echo "[RUN] BuildNdviAnomalyMaps (pixel-wise NDVI anomalies from monthly composites)"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildNdviAnomalyMaps
+
+.PHONY: ndvi-pixel-features
+ndvi-pixel-features:
+	@echo "_____________________________________________________________"
+	@echo
+	@echo "[RUN] BuildPixelFeatures (7D pixelwise temporal NDVI features)"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildPixelFeatures
+
 # ----------
-# Full pipeline
+# Full pipeline with step-wise cleanup
 # ----------
 .PHONY: full
-full: extract-aoi scene-catalog assets-manifest timestamps-aggregation ndvi-aggregated-composites monthly-statistics ndvi-climatology
-	@echo "✓ Data ingestion + NDVI composites + monthly statistics pipeline completed."
+full:
+	@echo "_____________________________________________________________"
+	@echo "[FULL] Step 1/8: Extract AOI"
+	$(MAKE) extract-aoi
+
+	@echo "_____________________________________________________________"
+	@echo "[FULL] Step 2/8: Build scene catalog"
+	$(MAKE) scene-catalog
+
+	@echo "_____________________________________________________________"
+	@echo "[FULL] Step 3/8: Build assets manifest"
+	$(MAKE) assets-manifest
+
+	@echo "_____________________________________________________________"
+	@echo "[FULL] Step 4/8: Aggregate timestamps"
+	$(MAKE) timestamps-aggregation
+
+	@echo "_____________________________________________________________"
+	@echo "[FULL] Cleanup: remove S2 cache (DATA_LAKE/cache/s2)"
+	$(MAKE) clean-cache-s2
+
+	@echo "_____________________________________________________________"
+	@echo "[FULL] Step 5/8: Build NDVI aggregated composites"
+	$(MAKE) ndvi-aggregated-composites
+
+	@echo "_____________________________________________________________"
+	@echo "[FULL] Cleanup: remove aggregated raw rasters (DATA_LAKE/data_raw/aggregated)"
+	$(MAKE) clean-aggregated-raw
+
+	@echo "_____________________________________________________________"
+	@echo "[FULL] Step 6/8: NDVI monthly statistics"
+	$(MAKE) monthly-statistics
+
+	@echo "_____________________________________________________________"
+	@echo "[FULL] Step 7/8: NDVI climatology"
+	$(MAKE) ndvi-climatology
+
+	@echo "_____________________________________________________________"
+	@echo "[FULL] Step 8/8: NDVI anomaly maps"
+	$(MAKE) ndvi-anomaly-maps
+
+	@echo "_____________________________________________________________"
+	@echo "[FULL] Final step: NDVI pixel features"
+	$(MAKE) ndvi-pixel-features
+
+	@echo "✓ Data ingestion + NDVI composites + monthly statistics pipeline completed (with step-wise cleanup)."
