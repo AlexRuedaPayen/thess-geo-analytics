@@ -15,8 +15,8 @@ scene_catalog:
   cloud_cover_max: 20.0
   max_items: 3000
   full_cover_threshold: 0.95
-  n_anchors: 64
-  window_days: 42
+  n_anchors: 38
+  window_days: 21
   collection: "sentinel-2-l2a"
 
 assets_manifest:
