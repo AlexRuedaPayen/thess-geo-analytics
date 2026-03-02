@@ -8,24 +8,22 @@ import matplotlib.pyplot as plt
 
 class SyntheticNdviViewer:
     """
-    Minimal utility to visualize:
-      • synthetic B04/B08 from the aggregated generator
-      • NDVI COGs produced by NdviAggregatedCompositeBuilder
+    Visualize synthetic NDVI reconstruction scenes:
+
+      • Ground-truth NDVI:  <name>_NDVI_TRUE.tif
+      • RED band (B04):     <name>_B04.tif
+      • NIR band (B08):     <name>_B08.tif
 
     Reads files from:
-        tests/fixtures/generated/ndvi_aggregated/
+        tests/fixtures/generated/ndvi_reconstruction/<name>/
+    where <name> is e.g. "mini", "large".
     """
 
     def __init__(self):
-        self.root = Path("tests/fixtures/generated/ndvi_aggregated").resolve()
-        self.agg_root = self.root / "aggregated"
-        self.cogs_root = self.root / "outputs" / "cogs"
+        self.root = Path("tests/fixtures/generated/ndvi_reconstruction").resolve()
 
-        if not self.agg_root.exists():
-            raise RuntimeError(f"No synthetic aggregated data found: {self.agg_root}")
-
-        if not self.cogs_root.exists():
-            raise RuntimeError(f"No NDVI COGs found: {self.cogs_root}")
+        if not self.root.exists():
+            raise RuntimeError(f"No synthetic NDVI reconstruction data found: {self.root}")
 
     # -----------------------------
     # helpers
@@ -55,9 +53,9 @@ class SyntheticNdviViewer:
         # Stats
         self._print_stats(f"{title_prefix} – B04", b04_arr)
         self._print_stats(f"{title_prefix} – B08", b08_arr)
-        self._print_stats(f"{title_prefix} – NDVI", ndvi_arr)
+        self._print_stats(f"{title_prefix} – NDVI_TRUE", ndvi_arr)
 
-        # Shared valid mask for vmin/vmax on B04/B08
+        # Robust vmin/vmax for B04/B08
         v_b04 = b04_arr[~np.isnan(b04_arr)]
         v_b08 = b08_arr[~np.isnan(b08_arr)]
         if v_b04.size > 0:
@@ -82,7 +80,7 @@ class SyntheticNdviViewer:
         fig.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
 
         im2 = axes[2].imshow(ndvi_arr, cmap="RdYlGn", vmin=-1.0, vmax=1.0)
-        axes[2].set_title("NDVI composite")
+        axes[2].set_title("NDVI TRUE")
         axes[2].axis("off")
         fig.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
 
@@ -93,42 +91,43 @@ class SyntheticNdviViewer:
     # -----------------------------
     # public API
     # -----------------------------
-    def list_synthetic_timestamps(self):
-        folders = sorted(self.agg_root.iterdir())
-        return [f for f in folders if f.is_dir()]
+    def list_cases(self):
+        """
+        List subdirectories under ndvi_reconstruction/, e.g. mini, large.
+        """
+        if not self.root.exists():
+            return []
+        return [p for p in sorted(self.root.iterdir()) if p.is_dir()]
 
     def run(self):
-        print("\n=== Synthetic NDVI Viewer ===")
-        print("Synthetic aggregated path:", self.agg_root)
-        print("NDVI COG output path:", self.cogs_root)
+        print("\n=== Synthetic NDVI Viewer (reconstruction scenes) ===")
+        print("Root:", self.root)
 
-        ts_dirs = self.list_synthetic_timestamps()
-        if not ts_dirs:
-            print("No timestamp folders found under", self.agg_root)
+        cases = self.list_cases()
+        if not cases:
+            print("No subdirectories found under", self.root)
             return
 
-        for ts_dir in ts_dirs:
-            # Derive month label from timestamp folder name: '2024-01-10T...' -> '2024-01'
-            ts_name = ts_dir.name  # e.g. '2024-01-10T10_00_00Z'
-            month_label = ts_name[:7]  # '2024-01'
+        for case_dir in cases:
+            name = case_dir.name
+            print(f"\n=== Case: {name} ===")
 
-            # Find matching NDVI COG (monthly composite)
-            matching_cogs = list(self.cogs_root.glob(f"ndvi_{month_label}_*.tif"))
-            if not matching_cogs:
-                print(f"[WARN] No NDVI COG found for month {month_label}, skipping.")
+            ndvi_path = case_dir / f"{name}_NDVI_TRUE.tif"
+            b04_path = case_dir / f"{name}_B04.tif"
+            b08_path = case_dir / f"{name}_B08.tif"
+
+            missing = [p for p in (ndvi_path, b04_path, b08_path) if not p.exists()]
+            if missing:
+                print(f"[WARN] Missing files in case {name}:")
+                for m in missing:
+                    print("   -", m)
                 continue
 
-            ndvi_path = matching_cogs[0]
-
-            # Read B04/B08/NDVI
-            b04_path = next(ts_dir.glob("*B04*.tif"))
-            b08_path = next(ts_dir.glob("*B08*.tif"))
-
+            ndvi_arr = self._read_tif(ndvi_path)
             b04_arr = self._read_tif(b04_path)
             b08_arr = self._read_tif(b08_path)
-            ndvi_arr = self._read_tif(ndvi_path)
 
-            title = f"Timestamp {ts_name} vs NDVI {ndvi_path.name}"
+            title = f"{name}: NDVI_TRUE vs B04/B08"
             self._show_triplet(b04_arr, b08_arr, ndvi_arr, title_prefix=title)
 
 

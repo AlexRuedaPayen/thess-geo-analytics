@@ -14,30 +14,27 @@ class MiniNdviSceneConfig:
     """
     Synthetic NDVI scene configuration.
 
-    We start from a *true* NDVI field and then derive B04/B08 so that:
+    Process:
+      1) Draw NDVI from a uniform distribution in [ndvi_min, ndvi_max]
+      2) Draw S = RED + NIR from [s_min, s_max]
+      3) Enforce NDVI exactly by solving:
 
-        NDVI = (NIR - RED) / (NIR + RED)
+           NDVI = (NIR - RED) / (NIR + RED)   with S = NIR + RED
 
-    exactly at every pixel.
+         => NIR = 0.5 * S * (1 + NDVI)
+            RED = 0.5 * S * (1 - NDVI)
 
-    Parameters
-    ----------
-    out_dir : Path
-        Directory where B04/B08 (and optional SCL) will be written.
-    name : str
-        Logical name of the scene (used in filenames).
-    H, W : int
-        Height and width of the rasters.
-    ndvi_min, ndvi_max : float
-        Range for uniform NDVI sampling (must be strictly inside (-1, 1)).
-    s_min, s_max : float
-        Range for uniform brightness S = RED + NIR (kept within (0, 1]).
-    nodata : float
-        Nodata value used for rasters (not actually used here but provided for consistency).
-    crs : str
-        CRS of the rasters.
-    pixel_size : float
-        Pixel size for the affine transform.
+      4) Write:
+           <name>_NDVI_TRUE.tif  (ground truth NDVI)
+           <name>_B04.tif        (RED)
+           <name>_B08.tif        (NIR)
+           <name>_SCL.tif        (simple classification mask)
+
+    This gives:
+      - spatially varying NDVI (uniform)
+      - plausible reflectances (0–1)
+      - exact consistency between NDVI and bands
+      - an SCL raster with a valid uint16 nodata
     """
 
     out_dir: Path
@@ -54,40 +51,23 @@ class MiniNdviSceneConfig:
 
 
 class MiniNdviSceneGenerator:
-    """
-    Given an NDVI distribution, creates a consistent set of B04/B08 rasters
-    and returns the ground-truth NDVI array.
-
-    The math is:
-
-      S = RED + NIR  (brightness term, chosen freely in [s_min, s_max])
-      NDVI = (NIR - RED) / (NIR + RED)
-
-    Solve for NIR and RED:
-
-      NIR = 0.5 * S * (1 + NDVI)
-      RED = 0.5 * S * (1 - NDVI)
-
-    As long as |NDVI| < 1 and 0 < S <= 1, RED and NIR are in [0, S].
-    """
-
     def __init__(self, cfg: MiniNdviSceneConfig) -> None:
         self.cfg = cfg
 
-    def generate(self) -> Tuple[np.ndarray, Path, Path, Path]:
+    def generate(self) -> Tuple[Path, Path, Path, Path]:
         """
-        Generate one NDVI scene and corresponding B04/B08/SCL rasters.
+        Generate one NDVI scene + B04/B08/SCL rasters.
 
         Returns
         -------
-        ndvi_true : np.ndarray (H, W)
-            Ground truth NDVI field.
+        ndvi_path : Path
+            Path to ground-truth NDVI GeoTIFF.
         b04_path : Path
-            Path to written B04 GeoTIFF (RED).
+            Path to B04 (RED) GeoTIFF.
         b08_path : Path
-            Path to written B08 GeoTIFF (NIR).
+            Path to B08 (NIR) GeoTIFF.
         scl_path : Path
-            Path to written SCL GeoTIFF (simple classification; all valid).
+            Path to SCL (classification) GeoTIFF.
         """
         cfg = self.cfg
         out_dir = cfg.out_dir
@@ -96,29 +76,33 @@ class MiniNdviSceneGenerator:
         H, W = cfg.H, cfg.W
         rng = np.random.default_rng(1234 + hash(cfg.name) % 10000)
 
-        # 1) Ground-truth NDVI: uniform in [ndvi_min, ndvi_max]
+        # 1) NDVI: uniform spatial field in [ndvi_min, ndvi_max]
         ndvi = rng.uniform(cfg.ndvi_min, cfg.ndvi_max, size=(H, W)).astype("float32")
-        # Ensure we stay safely inside (-1, 1)
+        # stay safely inside (-1, 1)
         eps = 1e-3
         ndvi = np.clip(ndvi, -1.0 + eps, 1.0 - eps)
 
-        # 2) Brightness S (RED + NIR)
+        # 2) Brightness S = RED + NIR
         S = rng.uniform(cfg.s_min, cfg.s_max, size=(H, W)).astype("float32")
 
-        # 3) Compute NIR / RED from NDVI & S
+        # 3) Solve for NIR / RED exactly
         nir = 0.5 * S * (1.0 + ndvi)   # B08
         red = 0.5 * S * (1.0 - ndvi)   # B04
 
-        # Sanity clamp to [0, 1]
         nir = np.clip(nir, 0.0, 1.0)
         red = np.clip(red, 0.0, 1.0)
 
-        # 4) Simple SCL: all "valid vegetation" (e.g. code 4) for now
-        scl = np.full((H, W), 4, dtype="uint16")
+        # 4) Simple SCL: mix of classes for diversity
+        # codes (example): 1=saturated/invalid, 4=vegetation, 5=bare, 6=water
+        scl = rng.choice(
+            [1, 4, 5, 6],
+            size=(H, W),
+            p=[0.05, 0.6, 0.25, 0.1],
+        ).astype("uint16")
 
         transform = from_origin(0.0, 0.0, cfg.pixel_size, cfg.pixel_size)
 
-        base_profile = {
+        profile_f32 = {
             "driver": "GTiff",
             "height": H,
             "width": W,
@@ -130,29 +114,38 @@ class MiniNdviSceneGenerator:
             "compress": "deflate",
         }
 
+        # Ground-truth NDVI
+        ndvi_path = out_dir / f"{cfg.name}_NDVI_TRUE.tif"
+        with rasterio.open(ndvi_path, "w", **profile_f32) as dst:
+            dst.write(ndvi, 1)
+
         # B04
         b04_path = out_dir / f"{cfg.name}_B04.tif"
-        with rasterio.open(b04_path, "w", **base_profile) as dst:
+        with rasterio.open(b04_path, "w", **profile_f32) as dst:
             dst.write(red, 1)
 
         # B08
         b08_path = out_dir / f"{cfg.name}_B08.tif"
-        with rasterio.open(b08_path, "w", **base_profile) as dst:
+        with rasterio.open(b08_path, "w", **profile_f32) as dst:
             dst.write(nir, 1)
 
-        # SCL (classification)
-        scl_profile = base_profile.copy()
-        scl_profile["dtype"] = "uint16"
+        # SCL (uint16, with valid nodata)
+        profile_u16 = profile_f32.copy()
+        profile_u16["dtype"] = "uint16"
+        # use 0 as nodata; our codes are {1,4,5,6}, so 0 is safe
+        profile_u16["nodata"] = 0
+
         scl_path = out_dir / f"{cfg.name}_SCL.tif"
-        with rasterio.open(scl_path, "w", **scl_profile) as dst:
+        with rasterio.open(scl_path, "w", **profile_u16) as dst:
             dst.write(scl, 1)
 
         print(
-            f"[GEN NDVI] name={cfg.name}, H={H}, W={W}, "
-            f"ndvi_min={ndvi.min():.3f}, ndvi_max={ndvi.max():.3f}"
+            f"[GEN NDVI] {cfg.name}: H={H}, W={W}, "
+            f"NDVI[min,max]=({ndvi.min():.3f}, {ndvi.max():.3f}), "
+            f"S[min,max]=({S.min():.3f}, {S.max():.3f})"
         )
 
-        return ndvi, b04_path, b08_path, scl_path
+        return ndvi_path, b04_path, b08_path, scl_path
 
 
 # --------------------------------------------------------------
@@ -174,11 +167,13 @@ if __name__ == "__main__":
             W=W,
             ndvi_min=-0.2,
             ndvi_max=0.9,
+            s_min=0.2,
+            s_max=0.8,
         )
         gen = MiniNdviSceneGenerator(cfg)
-        ndvi, b04_path, b08_path, scl_path = gen.generate()
+        ndvi_path, b04_path, b08_path, scl_path = gen.generate()
         print(
-            f"[GEN NDVI] case={name}, ndvi_mean={float(ndvi.mean()):.3f}, "
+            f"[GEN NDVI] case={name}, ndvi={ndvi_path.name}, "
             f"B04={b04_path.name}, B08={b08_path.name}, SCL={scl_path.name}"
         )
 

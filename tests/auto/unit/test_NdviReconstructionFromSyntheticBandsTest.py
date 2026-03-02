@@ -14,14 +14,19 @@ from tests.fixtures.generators.MiniNdviSceneGenerator import (
 )
 
 
-class NdviReconstructionFromBandsTest(unittest.TestCase):
+class NdviReconstructionFromSyntheticBandsTest(unittest.TestCase):
     """
-    Given a synthetic NDVI scene, we derive B04/B08 and then check that
-    NdviProcessor can reconstruct the original NDVI field.
+    Pipeline-style test:
 
-    We test two sizes:
-      - mini  (16 x 16)
-      - large (128 x 128)
+      1. Start from a ground-truth NDVI raster (uniform distribution).
+      2. From that, derive B04, B08, SCL (reflectances & mask).
+      3. Feed B04/B08 into NdviProcessor.
+      4. Check that the reconstructed NDVI matches the original NDVI
+         field (up to tiny numerical noise).
+
+    We do this for:
+      - mini  (16 x 16 raster)
+      - large (128 x 128 raster)
     """
 
     def _run_one_case(self, name: str, H: int, W: int) -> None:
@@ -38,15 +43,23 @@ class NdviReconstructionFromBandsTest(unittest.TestCase):
             s_max=0.8,
         )
         gen = MiniNdviSceneGenerator(cfg)
-        ndvi_true, b04_path, b08_path, _scl_path = gen.generate()
+        ndvi_path, b04_path, b08_path, scl_path = gen.generate()
 
         # ---------------------------
-        # Use NdviProcessor to reconstruct NDVI from B04/B08
+        # Load ground-truth NDVI
+        # ---------------------------
+        with rasterio.open(ndvi_path) as ds_true:
+            ndvi_true = ds_true.read(1).astype("float32")
+            ndvi_nodata = ds_true.nodata
+
+        if ndvi_nodata is not None:
+            ndvi_true = np.where(ndvi_true == ndvi_nodata, np.nan, ndvi_true)
+
+        # ---------------------------
+        # Use NdviProcessor on B04/B08
         # ---------------------------
         proc = NdviProcessor()
 
-        # We can either read with our own rasterio code OR use NdviProcessor.read_bands
-        # If you want to exercise read_bands and alignment checking:
         red, nir, _profile = proc.read_bands(b04_path, b08_path)
         ndvi_est = proc.compute_ndvi(red, nir)
 
@@ -59,6 +72,7 @@ class NdviReconstructionFromBandsTest(unittest.TestCase):
         diff = np.abs(ndvi_est[mask] - ndvi_true[mask])
         max_diff = float(diff.max()) if diff.size > 0 else 0.0
 
+        # Tight comparison; everything is analytic
         self.assertTrue(
             np.allclose(ndvi_est[mask], ndvi_true[mask], rtol=1e-5, atol=1e-5),
             msg=f"NDVI reconstruction mismatch for case={name}, max_diff={max_diff}",
