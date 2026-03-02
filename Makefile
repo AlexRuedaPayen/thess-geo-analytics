@@ -39,6 +39,15 @@ clean-aggregated-raw:
 	@$(PYTHON) -m thess_geo_analytics.utils.cleanup aggregated_raw
 
 # ------------------------
+# Testing
+# -----------------------
+
+
+.PHONY: test
+test:
+	$(PYTHON) -m unittest discover -s tests/auto/unit -v
+
+# ------------------------
 # Help
 # ------------------------
 
@@ -143,16 +152,9 @@ full:
 	$(MAKE) timestamps-aggregation
 
 	@echo "_____________________________________________________________"
-	@echo "[FULL] Cleanup S2 cache"
-	$(MAKE) clean-cache-s2
-
-	@echo "_____________________________________________________________"
 	@echo "[FULL] Step 5: NDVI aggregated composites"
 	$(MAKE) ndvi-aggregated-composites
 
-	@echo "_____________________________________________________________"
-	@echo "[FULL] Cleanup aggregated raw rasters"
-	$(MAKE) clean-aggregated-raw
 
 	@echo "_____________________________________________________________"
 	@echo "[FULL] Step 6: NDVI monthly statistics"

@@ -243,6 +243,7 @@ class NdviAggregatedCompositeBuilder:
                         "scenes_skipped": info.get("scenes_skipped"),
                         "ndvi_min": info.get("ndvi_min"),
                         "ndvi_max": info.get("ndvi_max"),
+                        "ndvi_share_negative": info.get("ndvi_share_negative"),
                         "cloud_masking": bool(enable_cloud_masking),
                         "folders": str([str(p) for p in folders]),
                         "error_message": "",
@@ -277,6 +278,7 @@ class NdviAggregatedCompositeBuilder:
                         "scenes_skipped": "",
                         "ndvi_min": "",
                         "ndvi_max": "",
+                        "ndvi_share_negative": "",
                         "cloud_masking": bool(enable_cloud_masking),
                         "folders": str([str(p) for p in folders]),
                         "error_message": msg,
@@ -350,7 +352,7 @@ class NdviAggregatedCompositeBuilder:
         Returns:
           (out_tif, meta_json, info_dict)
 
-        info_dict includes scenes_used, scenes_skipped, ndvi_min, ndvi_max.
+        info_dict includes scenes_used, scenes_skipped, ndvi_min, ndvi_max, ndvi_share_negative.
         """
         if max_scenes is not None and max_scenes > 0:
             folders = folders[:max_scenes]
@@ -373,23 +375,48 @@ class NdviAggregatedCompositeBuilder:
                 continue
 
             try:
-                with rasterio.open(b04) as ds_r, rasterio.open(b08) as ds_n:
-                    red = ds_r.read(1).astype(np.float32)
-                    nir = ds_n.read(1).astype(np.float32)
+                # Read aligned RED/NIR via NdviProcessor
+                red, nir, prof = self.ndvi.read_bands(b04_path=b04, b08_path=b08)
 
-                    nd_native = self.ndvi.compute_ndvi(red, nir)
-
-                    nd_target = np.empty((target.height, target.width), dtype=np.float32)
-                    reproject(
-                        source=nd_native,
-                        destination=nd_target,
-                        src_transform=ds_r.transform,
-                        src_crs=ds_r.crs,
-                        dst_transform=target.transform,
-                        dst_crs=target.crs,
-                        resampling=Resampling.bilinear,
-                        dst_nodata=np.nan,
+                if verbose:
+                    red_min, red_max = float(red.min()), float(red.max())
+                    nir_min, nir_max = float(nir.min()), float(nir.max())
+                    print(
+                        f"[DEBUG] {folder.name}: RED min/max={red_min:.4f}/{red_max:.4f}, "
+                        f"NIR min/max={nir_min:.4f}/{nir_max:.4f}"
                     )
+
+                nd_native = self.ndvi.compute_ndvi(red, nir)
+
+                # Per-scene NDVI diagnostics
+                valid_native = nd_native[~np.isnan(nd_native)]
+                if valid_native.size == 0:
+                    scenes_skipped += 1
+                    if verbose:
+                        print(f"[WARN] All-NaN NDVI for {folder}, skipping scene.")
+                    continue
+
+                scene_min = float(valid_native.min())
+                scene_max = float(valid_native.max())
+                scene_share_neg = float((valid_native < 0).mean())
+
+                if verbose:
+                    print(
+                        f"[DEBUG] {folder.name}: NDVI min={scene_min:.4f}, "
+                        f"max={scene_max:.4f}, share_neg={scene_share_neg:.3%}"
+                    )
+
+                nd_target = np.empty((target.height, target.width), dtype=np.float32)
+                reproject(
+                    source=nd_native,
+                    destination=nd_target,
+                    src_transform=prof["transform"],
+                    src_crs=prof["crs"],
+                    dst_transform=target.transform,
+                    dst_crs=target.crs,
+                    resampling=Resampling.nearest, #Resampling.bilinear, <---- possibly causing non-negative values on areas that are supposed to be postiive
+                    dst_nodata=np.nan,
+                )
 
                 # optional cloud mask
                 if enable_cloud_masking and scl is not None:
@@ -445,8 +472,15 @@ class NdviAggregatedCompositeBuilder:
             composite = np.nanmedian(stack, axis=0).astype(np.float32)
 
         valid = composite[~np.isnan(composite)]
-        ndvi_min = float(valid.min()) if valid.size else None
-        ndvi_max = float(valid.max()) if valid.size else None
+        ndvi_min: float | None = float(valid.min()) if valid.size else None
+        ndvi_max: float | None = float(valid.max()) if valid.size else None
+        ndvi_share_negative: float | None = float((valid < 0).mean()) if valid.size else None
+
+        if verbose and valid.size:
+            print(
+                f"[DEBUG] Composite {label}: NDVI min={ndvi_min:.4f}, "
+                f"max={ndvi_max:.4f}, share_neg={ndvi_share_negative:.3%}"
+            )
 
         out_tif = self._write_tif(label, composite)
         meta_path = self._write_metadata(
@@ -459,6 +493,7 @@ class NdviAggregatedCompositeBuilder:
             enable_cloud_masking=enable_cloud_masking,
             ndvi_min=ndvi_min,
             ndvi_max=ndvi_max,
+            ndvi_share_negative=ndvi_share_negative,
         )
 
         info = {
@@ -466,6 +501,7 @@ class NdviAggregatedCompositeBuilder:
             "scenes_skipped": scenes_skipped,
             "ndvi_min": ndvi_min,
             "ndvi_max": ndvi_max,
+            "ndvi_share_negative": ndvi_share_negative,
         }
 
         return out_tif, meta_path, info
@@ -474,7 +510,15 @@ class NdviAggregatedCompositeBuilder:
     # Helpers
     # ------------------------------------------------------------------
     def _first_tif(self, folder: Path, pattern: str) -> Path | None:
-        candidates = sorted(folder.glob(f"*{pattern}*.tif"))
+        """
+        Return first matching TIFF for a given pattern.
+        Slightly prefers 10m-resolution naming (e.g. *B04*10m*.tif)
+        if such files exist; otherwise any *pattern*.tif.
+        """
+        candidates = sorted(
+            list(folder.glob(f"*{pattern}*10m*.tif")) or
+            list(folder.glob(f"*{pattern}*.tif"))
+        )
         return candidates[0] if candidates else None
 
     def _get_target(self):
@@ -530,6 +574,7 @@ class NdviAggregatedCompositeBuilder:
         enable_cloud_masking: bool,
         ndvi_min: float | None,
         ndvi_max: float | None,
+        ndvi_share_negative: float | None,
     ) -> Path:
         meta_dir = RepoPaths.OUTPUTS / "metadata"
         meta_dir.mkdir(parents=True, exist_ok=True)
@@ -546,6 +591,7 @@ class NdviAggregatedCompositeBuilder:
             "cloud_masking": bool(enable_cloud_masking),
             "ndvi_min": ndvi_min,
             "ndvi_max": ndvi_max,
+            "ndvi_share_negative": ndvi_share_negative,
         }
 
         with out_meta.open("w", encoding="utf-8") as f:

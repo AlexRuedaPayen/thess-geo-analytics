@@ -1,6 +1,7 @@
 # tests/auto/unit/test_NdviAggregatedCompositeBuilder.py
 
 from __future__ import annotations
+from thess_geo_analytics.geo.AoiTargetGrid import AoiTargetGrid
 
 import shutil
 import unittest
@@ -57,6 +58,9 @@ class NdviAggregatedCompositeBuilderTest(unittest.TestCase):
     All artifacts are written under:
       tests/fixtures/generated/ndvi_aggregated/outputs/...
     and are **kept** after the test completes.
+
+    This test now also checks numeric NDVI correctness for a simple
+    synthetic scenario where RED/NIR are constant per timestamp.
     """
 
     def setUp(self) -> None:
@@ -101,25 +105,69 @@ class NdviAggregatedCompositeBuilderTest(unittest.TestCase):
         return aoi_path
 
     def test_ndvi_composites_from_aggregated(self) -> None:
+        """
+        Full test with controlled RED/NIR values so that we can
+        assert NDVI composites and monthly aggregation behave as expected.
+        """
+
         timestamps = [
             "2024-01-10T10:00:00Z",
             "2024-01-20T10:00:00Z",
             "2024-02-05T10:00:00Z",
         ]
 
+        # Controlled RED/NIR per timestamp (constant rasters):
+        #  t1: NDVI = (0.8 - 0.2) / (0.8 + 0.2) = 0.6
+        #  t2: NDVI = (0.4 - 0.6) / (0.4 + 0.6) = -0.2
+        #  t3: NDVI = (0.3 - 0.3) / (0.3 + 0.3) = 0.0
+        red_values = [0.2, 0.6, 0.3]
+        nir_values = [0.8, 0.4, 0.3]
+
+        ndvi_t1 = (0.8 - 0.2) / (0.8 + 0.2)   # 0.6
+        ndvi_t2 = (0.4 - 0.6) / (0.4 + 0.6)   # -0.2
+        ndvi_t3 = (0.3 - 0.3) / (0.3 + 0.3)   # 0.0
+
+        # Expected monthly composites using median over timestamps per month:
+        #  Jan 2024 → median(0.6, -0.2) = 0.2
+        #  Feb 2024 → 0.0
+        expected_monthly_ndvi = {
+            "2024-01": np.median([ndvi_t1, ndvi_t2]),
+            "2024-02": ndvi_t3,
+        }
+
         # 1) Create minimal aggregated input
-        agg_cfg = MiniAggregatedTimestampsConfig(
-            root=self.test_root,
-            timestamps=timestamps,
-            height=8,
-            width=8,
-        )
-        agg_gen = MiniAggregatedTimestampsGenerator(agg_cfg)
-        aggregated_root = agg_gen.generate()
+    
+       
 
         # 2) Dummy AOI
         aoi_path = self._write_dummy_aoi()
         aoi_id = "el522"
+
+        # 2a) Build the same target grid that the builder will use,
+        #     so our synthetic rasters share the exact same extent/transform.
+        target = AoiTargetGrid(
+            aoi_path=aoi_path,
+            target_crs="EPSG:32634",
+            resolution=10.0,
+        ).build()
+
+        height = target.height
+        width = target.width
+        transform = target.transform
+        crs = target.crs
+
+        agg_cfg = MiniAggregatedTimestampsConfig(
+            root=self.test_root,
+            timestamps=timestamps,
+            red_values=red_values,
+            nir_values=nir_values,
+            height=height,
+            width=width,
+            transform=transform,
+            crs=crs,
+        )
+        agg_gen = MiniAggregatedTimestampsGenerator(agg_cfg)
+        aggregated_root = agg_gen.generate()
 
         # 3) Run builder with RepoPaths redirected to test_root
         with RepoPathsOverride(self.test_root):
@@ -142,8 +190,11 @@ class NdviAggregatedCompositeBuilderTest(unittest.TestCase):
             # At least one composite should be produced
             self.assertGreaterEqual(len(results), 1)
 
-            # Check that NDVI COGs exist and have reasonable values
-            for label, tif_path, meta_path in results:
+            # Map label -> (tif_path, meta_path) for easier access
+            label_to_paths = {label: (tif_path, meta_path) for label, tif_path, meta_path in results}
+
+            # 3a) Basic existence + range checks (previous behavior)
+            for label, (tif_path, meta_path) in label_to_paths.items():
                 self.assertTrue(tif_path.exists(), f"Missing NDVI COG: {tif_path}")
                 self.assertTrue(meta_path.exists(), f"Missing metadata: {meta_path}")
 
@@ -153,10 +204,53 @@ class NdviAggregatedCompositeBuilderTest(unittest.TestCase):
                     if valid.size > 0:
                         self.assertTrue(
                             np.all(valid >= -1.0) and np.all(valid <= 1.0),
-                            "NDVI values out of expected range [-1, 1]",
+                            f"NDVI values out of expected range [-1, 1] for label={label}",
                         )
 
-            # Check status/summary CSVs via the (overridden) RepoPaths
+            # 3b) Numeric NDVI checks for our synthetic monthly composites
+            tol = 1e-4
+            for month_label, expected_ndvi in expected_monthly_ndvi.items():
+                self.assertIn(
+                    month_label,
+                    label_to_paths,
+                    f"Expected monthly composite {month_label} not produced.",
+                )
+                tif_path, _ = label_to_paths[month_label]
+
+                with rasterio.open(tif_path) as ds:
+                    arr = ds.read(1).astype("float32")
+                    nodata = ds.nodata
+                    if nodata is not None:
+                        arr = np.where(arr == nodata, np.nan, arr)
+
+                valid = arr[~np.isnan(arr)]
+                self.assertGreater(len(valid), 0, f"No valid NDVI pixels for {month_label}")
+
+                mean_val = float(valid.mean())
+                min_val = float(valid.min())
+                max_val = float(valid.max())
+
+                self.assertAlmostEqual(
+                    mean_val,
+                    expected_ndvi,
+                    delta=tol,
+                    msg=f"Mean NDVI for {month_label} is {mean_val}, expected {expected_ndvi}",
+                )
+                # Since rasters are constant, min and max should also be ~expected
+                self.assertAlmostEqual(
+                    min_val,
+                    expected_ndvi,
+                    delta=tol,
+                    msg=f"Min NDVI for {month_label} is {min_val}, expected {expected_ndvi}",
+                )
+                self.assertAlmostEqual(
+                    max_val,
+                    expected_ndvi,
+                    delta=tol,
+                    msg=f"Max NDVI for {month_label} is {max_val}, expected {expected_ndvi}",
+                )
+
+            # 4) Check status/summary CSVs via the (overridden) RepoPaths
             from thess_geo_analytics.utils.RepoPaths import RepoPaths as RP2
 
             status_csv = RP2.table("ndvi_aggregated_composites_status.csv")

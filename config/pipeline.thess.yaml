@@ -5,17 +5,17 @@ region: "Thessaloniki"
 aoi_id: "el522"
 
 pipeline:
-  date_start: "2021-01-01"
+  date_start: "2023-01-01"
   # date_end: "2021-12-31"
 
 raster:
-  resolution: 10
+  resolution: 20
 
 scene_catalog:
   cloud_cover_max: 20.0
   max_items: 3000
   full_cover_threshold: 0.95
-  n_anchors: 38
+  n_anchors: 18
   window_days: 21
   collection: "sentinel-2-l2a"
 
