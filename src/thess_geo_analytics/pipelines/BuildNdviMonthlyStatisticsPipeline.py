@@ -123,22 +123,39 @@ class BuildNdviMonthlyStatisticsPipeline:
         cogs_dir = self._cogs_dir()
         cogs_dir.mkdir(parents=True, exist_ok=True)
 
-        tifs = sorted(cogs_dir.glob(f"ndvi_*_{params.aoi_id}.tif"))
-        if not tifs:
+        # All ndvi_* COGs for this AOI
+        all_tifs = sorted(cogs_dir.glob(f"ndvi_*_{params.aoi_id}.tif"))
+        if not all_tifs:
             raise FileNotFoundError(
-                f"No composites found in {cogs_dir} for aoi_id={params.aoi_id} "
-                f"(expected ndvi_<period>_{params.aoi_id}.tif)."
+                f"No ndvi_*_{params.aoi_id}.tif files found in {cogs_dir}. "
+                f"Expected base composites like ndvi_<period>_{params.aoi_id}.tif."
             )
 
         rows: List[Dict[str, Any]] = []
 
-        for tif_path in tifs:
-            period = self._extract_period_from_stem(tif_path.stem)
-            if period is None:
-                # Skip files that don't match naming convention
+        # Positive selection: only stems of the form
+        #   ndvi_<YYYY-MM>_<aoi_id>
+        #   ndvi_<YYYY-Qn>_<aoi_id>
+        pattern = re.compile(
+            rf"^ndvi_"
+            r"(\d{4}-(\d{2}|Q[1-4]))"  # capture <period>
+            rf"_{re.escape(params.aoi_id)}$"
+        )
+
+        for tif_path in all_tifs:
+            stem = tif_path.stem  # e.g. "ndvi_2023-Q1_el522" or "ndvi_anomaly_2023-Q1_el522"
+
+            m = pattern.match(stem)
+            if not m:
+                # Anything like ndvi_anomaly_*, ndvi_climatology_*, etc. is ignored here
                 continue
 
-            self._validate_period(period)
+            period = m.group(1)  # the YYYY-MM or YYYY-Qn part
+
+            # Extra safety: validate format
+            if not _PERIOD_RE.match(period):
+                # Should not happen if regex is correct, but keep for robustness
+                continue
 
             stats = self._compute_stats_for_tif(tif_path)
             stats["period"] = period
@@ -149,16 +166,14 @@ class BuildNdviMonthlyStatisticsPipeline:
 
         if not rows:
             raise RuntimeError(
-                "Found composites but could not extract any valid periods "
-                "from filenames (ndvi_<period>_<aoi>.tif)."
+                "Found ndvi_* COGs for this AOI, but none matched "
+                "ndvi_<YYYY-MM|YYYY-Qn>_<aoi_id>.tif. "
+                "Are you only producing anomaly/climatology products?"
             )
 
         df = pd.DataFrame(rows)
-
-        # Stable sort: first by aoi, then period
         df = df.sort_values(["aoi_id", "period"]).reset_index(drop=True)
 
-        # Save CSV
         params.stats_csv.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(params.stats_csv, index=False)
         print(f"[OK] NDVI period stats written → {params.stats_csv}")

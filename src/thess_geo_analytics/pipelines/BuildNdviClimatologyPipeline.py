@@ -134,14 +134,19 @@ class BuildNdviClimatologyPipeline:
         params: BuildNdviClimatologyParams,
     ) -> pd.DataFrame:
         """
-        Scan outputs/cogs for ndvi_<period>_<aoi_id>.tif and compute the
-        same per-period stats that would normally live in ndvi_period_stats.csv.
+        Scan outputs/cogs for *base* NDVI composites of the form:
+
+            ndvi_<period>_<aoi_id>.tif
+
+        where <period> is YYYY-MM or YYYY-Qn.
+
+        - any other ndvi_* products that don't match that pattern.
         """
         cogs_dir = RepoPaths.OUTPUTS / "cogs"
         cogs_dir.mkdir(parents=True, exist_ok=True)
 
-        tifs = sorted(cogs_dir.glob(f"ndvi_*_{params.aoi_id}.tif"))
-        if not tifs:
+        all_tifs = sorted(cogs_dir.glob(f"ndvi_*_{params.aoi_id}.tif"))
+        if not all_tifs:
             raise FileNotFoundError(
                 f"No composites found in {cogs_dir} for aoi_id={params.aoi_id} "
                 f"(expected ndvi_<period>_{params.aoi_id}.tif)."
@@ -149,13 +154,29 @@ class BuildNdviClimatologyPipeline:
 
         rows: List[Dict[str, Any]] = []
 
-        for tif_path in tifs:
-            period = self._extract_period_from_stem(tif_path.stem)
-            if period is None:
-                # Skip files that don't match naming convention
+        # Only accept stems of the form:
+        #   ndvi_<YYYY-MM|YYYY-Qn>_<aoi_id>
+        # and capture the <period> part.
+        pattern = re.compile(
+            rf"^ndvi_"
+            r"(\d{4}-(\d{2}|Q[1-4]))"          # capture <period>
+            rf"_{re.escape(params.aoi_id)}$"
+        )
+
+        for tif_path in all_tifs:
+            stem = tif_path.stem  # e.g. 'ndvi_2023-Q1_el522', 'ndvi_anomaly_2023-Q1_el522', ...
+
+            m = pattern.match(stem)
+            if not m:
+                # This will skip ndvi_anomaly_*, ndvi_climatology_*, etc.
                 continue
 
-            self._validate_period(period)
+            period = m.group(1)  # '2023-Q1' or '2024-05'
+
+            # Extra safety: should already be guaranteed by regex,
+            # but keep validation in case regex changes later.
+            if not _PERIOD_RE.match(period):
+                continue
 
             stats = self._compute_stats_for_tif(tif_path)
             stats["period"] = period
@@ -166,16 +187,15 @@ class BuildNdviClimatologyPipeline:
 
         if not rows:
             raise RuntimeError(
-                "Found composites but could not extract any valid periods "
-                "from filenames (ndvi_<period>_<aoi>.tif)."
+                "Found ndvi_* COGs for this AOI, but none matched "
+                "ndvi_<YYYY-MM|YYYY-Qn>_<aoi_id>.tif. "
+                "Are you only producing anomaly/climatology products?"
             )
 
         df = pd.DataFrame(rows)
-
-        # Stable sort: first by aoi, then period
         df = df.sort_values(["aoi_id", "period"]).reset_index(drop=True)
 
-        print("[INFO] Built per-period stats directly from cogs (not saved to CSV).")
+        print("[INFO] Built per-period stats directly from base NDVI COGs (not saved to CSV).")
         return df
 
     @staticmethod
