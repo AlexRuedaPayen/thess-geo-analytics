@@ -42,7 +42,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     params = BuildNdviMonthlyStatisticsParams(
         aoi_id=aoi_id,
         # Use the configured stats CSV path from pipeline_config
-        stats_csv=cfg.ndvi_period_stats_csv,
+        #stats_csv=cfg.ndvi_period_stats_csv,
         out_parquet=RepoPaths.table("nvdi_timeseries.parquet"),
         out_parquet_canonical=RepoPaths.table("ndvi_timeseries.parquet"),
         out_fig=RepoPaths.figure("ndvi_timeseries.png"),
