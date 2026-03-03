@@ -339,6 +339,9 @@ class NdviAggregatedCompositeBuilder:
     # ------------------------------------------------------------------
     # Core NDVI composite generation (single label)
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Core NDVI composite generation (single label) - low-RAM, windowed
+    # ------------------------------------------------------------------
     def _run_group(
         self,
         *,
@@ -349,18 +352,26 @@ class NdviAggregatedCompositeBuilder:
         verbose: bool,
     ) -> Tuple[Path, Path, Dict[str, Any]]:
         """
+        Low-RAM implementation:
+        - discover scenes for this label
+        - open an output NDVI raster on the AOI target grid
+        - iterate over small windows (blocks) in the output
+        - for each window, read NDVI for that window from all scenes,
+          compute a per-pixel median, apply AOI mask + cloud mask,
+          and write the window.
+        - accumulate global NDVI stats while streaming.
         Returns:
           (out_tif, meta_json, info_dict)
-
-        info_dict includes scenes_used, scenes_skipped, ndvi_min, ndvi_max, ndvi_share_negative.
         """
+
+        # Respect max_scenes cap
         if max_scenes is not None and max_scenes > 0:
             folders = folders[:max_scenes]
 
         target = self._get_target()
 
-        ndvi_stack: List[np.ndarray] = []
-        scenes_used = 0
+        # Discover scene band paths
+        scenes: List[Dict[str, Any]] = []
         scenes_skipped = 0
 
         for folder in folders:
@@ -371,125 +382,216 @@ class NdviAggregatedCompositeBuilder:
             if b04 is None or b08 is None:
                 scenes_skipped += 1
                 if verbose:
-                    print(f"[WARN] Missing B04/B08 in {folder}, skipping.")
+                    print(f"[WARN] Missing B04/B08 in {folder}, skipping scene.")
                 continue
 
-            try:
-                # Read aligned RED/NIR via NdviProcessor
-                red, nir, prof = self.ndvi.read_bands(b04_path=b04, b08_path=b08)
+            scenes.append({"folder": folder, "b04": b04, "b08": b08, "scl": scl})
 
-                if verbose:
-                    red_min, red_max = float(red.min()), float(red.max())
-                    nir_min, nir_max = float(nir.min()), float(nir.max())
-                    print(
-                        f"[DEBUG] {folder.name}: RED min/max={red_min:.4f}/{red_max:.4f}, "
-                        f"NIR min/max={nir_min:.4f}/{nir_max:.4f}"
-                    )
-
-                nd_native = self.ndvi.compute_ndvi(red, nir)
-
-                # Per-scene NDVI diagnostics
-                valid_native = nd_native[~np.isnan(nd_native)]
-                if valid_native.size == 0:
-                    scenes_skipped += 1
-                    if verbose:
-                        print(f"[WARN] All-NaN NDVI for {folder}, skipping scene.")
-                    continue
-
-                scene_min = float(valid_native.min())
-                scene_max = float(valid_native.max())
-                scene_share_neg = float((valid_native < 0).mean())
-
-                if verbose:
-                    print(
-                        f"[DEBUG] {folder.name}: NDVI min={scene_min:.4f}, "
-                        f"max={scene_max:.4f}, share_neg={scene_share_neg:.3%}"
-                    )
-
-                nd_target = np.empty((target.height, target.width), dtype=np.float32)
-                reproject(
-                    source=nd_native,
-                    destination=nd_target,
-                    src_transform=prof["transform"],
-                    src_crs=prof["crs"],
-                    dst_transform=target.transform,
-                    dst_crs=target.crs,
-                    resampling=Resampling.nearest, #Resampling.bilinear, <---- possibly causing non-negative values on areas that are supposed to be postiive
-                    dst_nodata=np.nan,
-                )
-
-                # optional cloud mask
-                if enable_cloud_masking and scl is not None:
-                    try:
-                        with rasterio.open(scl) as sds:
-                            scl_native = sds.read(1)
-                            scl_nodata = sds.nodata
-
-                            scl_target = np.empty((target.height, target.width), dtype=np.uint16)
-                            reproject(
-                                source=scl_native,
-                                destination=scl_target,
-                                src_transform=sds.transform,
-                                src_crs=sds.crs,
-                                dst_transform=target.transform,
-                                dst_crs=target.crs,
-                                resampling=Resampling.nearest,
-                                dst_nodata=scl_nodata,
-                            )
-
-                        invalid = self.masker.build_invalid_mask_from_scl(scl_target, scl_nodata)
-                        nd_target[invalid] = np.nan
-                    except Exception as e:
-                        if verbose:
-                            print(f"[WARN] Cloud masking failed for {folder}: {e}")
-
-                # AOI mask
-                nd_target[~target.aoi_mask] = np.nan
-
-                ndvi_stack.append(nd_target)
-                scenes_used += 1
-
-            except Exception as e:
-                scenes_skipped += 1
-                if verbose:
-                    print(f"[WARN] Failed to process {folder}: {e}")
+        scenes_used = len(scenes)
 
         if scenes_used == 0:
             raise RuntimeError(
-                f"No valid NDVI scenes for label={label} (folders={len(folders)}, skipped={scenes_skipped})."
+                f"No valid NDVI scenes for label={label} "
+                f"(folders={len(folders)}, skipped={scenes_skipped})."
             )
 
-        stack = np.stack(ndvi_stack, axis=0)
+        # Prepare output GeoTIFF on the AOI target grid
+        out_dir = RepoPaths.OUTPUTS / "cogs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_tif = out_dir / f"ndvi_{label}_{self.aoi_id}.tif"
 
-        # Suppress the "All-NaN slice encountered" warning locally.
-        # It's expected when some pixels are NaN across all scenes; we handle that via NaNs anyway.
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="All-NaN slice encountered",
-                category=RuntimeWarning,
-            )
-            composite = np.nanmedian(stack, axis=0).astype(np.float32)
+        nodata_val = -9999.0
 
-        valid = composite[~np.isnan(composite)]
-        ndvi_min: float | None = float(valid.min()) if valid.size else None
-        ndvi_max: float | None = float(valid.max()) if valid.size else None
-        ndvi_share_negative: float | None = float((valid < 0).mean()) if valid.size else None
+        profile = {
+            "driver": "GTiff",
+            "dtype": "float32",
+            "count": 1,
+            "crs": target.crs,
+            "transform": target.transform,
+            "width": target.width,
+            "height": target.height,
+            "nodata": nodata_val,
+            "compress": "deflate",
+            "tiled": True,
+        }
 
-        if verbose and valid.size:
+        # Global stats for the composite (over all windows)
+        global_min: float | None = None
+        global_max: float | None = None
+        neg_count: int = 0
+        valid_count: int = 0
+
+        # We will need the AOI mask in windows
+        aoi_mask_full = target.aoi_mask
+
+        from rasterio.windows import transform as window_transform
+
+        with rasterio.open(out_tif, "w", **profile) as dst:
+            # Iterate over small windows/blocks in the output raster
+            for (ji, window) in tqdm(
+                dst.block_windows(1),
+                desc=f"NDVI composites ({label})",
+                unit="block",
+                disable=not verbose,
+            ):
+                h = window.height
+                w = window.width
+
+                # AOI mask subset for this window
+                aoi_mask_win = aoi_mask_full[
+                    window.row_off : window.row_off + h,
+                    window.col_off : window.col_off + w,
+                ]
+
+                # Collect NDVI for this window from all scenes
+                ndvi_stack_win: List[np.ndarray] = []
+
+                for scene in scenes:
+                    folder = scene["folder"]
+                    b04 = scene["b04"]
+                    b08 = scene["b08"]
+                    scl = scene["scl"]
+
+                    try:
+                        with rasterio.open(b04) as ds_red, rasterio.open(b08) as ds_nir:
+                            # Window-specific transform for the target grid
+                            win_transform = window_transform(window, target.transform)
+
+                            red = np.empty((h, w), dtype=np.float32)
+                            nir = np.empty((h, w), dtype=np.float32)
+
+                            # Reproject RED to this window
+                            reproject(
+                                source=rasterio.band(ds_red, 1),
+                                destination=red,
+                                src_transform=ds_red.transform,
+                                src_crs=ds_red.crs,
+                                dst_transform=win_transform,
+                                dst_crs=target.crs,
+                                resampling=Resampling.nearest,
+                                dst_nodata=np.nan,
+                            )
+
+                            # Reproject NIR to this window
+                            reproject(
+                                source=rasterio.band(ds_nir, 1),
+                                destination=nir,
+                                src_transform=ds_nir.transform,
+                                src_crs=ds_nir.crs,
+                                dst_transform=win_transform,
+                                dst_crs=target.crs,
+                                resampling=Resampling.nearest,
+                                dst_nodata=np.nan,
+                            )
+
+                            # Compute NDVI for this window
+                            nd_win = self.ndvi.compute_ndvi(red, nir)
+
+                        # Optional cloud masking
+                        if enable_cloud_masking and scl is not None:
+                            try:
+                                with rasterio.open(scl) as sds:
+                                    scl_win = np.empty((h, w), dtype=np.uint16)
+                                    scl_nodata = sds.nodata
+
+                                    reproject(
+                                        source=rasterio.band(sds, 1),
+                                        destination=scl_win,
+                                        src_transform=sds.transform,
+                                        src_crs=sds.crs,
+                                        dst_transform=win_transform,
+                                        dst_crs=target.crs,
+                                        resampling=Resampling.nearest,
+                                        dst_nodata=scl_nodata,
+                                    )
+
+                                invalid = self.masker.build_invalid_mask_from_scl(
+                                    scl_win, scl_nodata
+                                )
+                                nd_win[invalid] = np.nan
+                            except Exception as e:
+                                if verbose:
+                                    print(f"[WARN] Cloud masking failed for {folder}: {e}")
+
+                        # Apply AOI mask
+                        nd_win[~aoi_mask_win] = np.nan
+
+                        # If everything is NaN, this scene contributes nothing for this window
+                        if np.all(np.isnan(nd_win)):
+                            continue
+
+                        ndvi_stack_win.append(nd_win)
+
+                    except Exception as e:
+                        scenes_skipped += 1
+                        if verbose:
+                            print(f"[WARN] Failed to process {folder} in window {window}: {e}")
+                        continue
+
+                if not ndvi_stack_win:
+                    # No valid NDVI for this window across all scenes → pure nodata
+                    out_block = np.full((h, w), nodata_val, dtype=np.float32)
+                    dst.write(out_block, 1, window=window)
+                    continue
+
+                stack_win = np.stack(ndvi_stack_win, axis=0)
+
+                # Median over time for this window
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="All-NaN slice encountered",
+                        category=RuntimeWarning,
+                    )
+                    composite_win = np.nanmedian(stack_win, axis=0).astype(np.float32)
+
+                # Update global stats from this window
+                valid = composite_win[~np.isnan(composite_win)]
+                if valid.size:
+                    win_min = float(valid.min())
+                    win_max = float(valid.max())
+                    if global_min is None or win_min < global_min:
+                        global_min = win_min
+                    if global_max is None or win_max > global_max:
+                        global_max = win_max
+
+                    neg_count += int((valid < 0).sum())
+                    valid_count += int(valid.size)
+
+                # Write this window to disk (convert NaN → nodata)
+                out_block = np.where(
+                    np.isnan(composite_win),
+                    nodata_val,
+                    composite_win,
+                ).astype(np.float32)
+                dst.write(out_block, 1, window=window)
+
+            # Build overviews at the end (like before)
+            dst.build_overviews([2, 4, 8, 16], Resampling.nearest)
+            dst.update_tags(ns="rio_overview", resampling="nearest")
+
+        ndvi_min: float | None = global_min
+        ndvi_max: float | None = global_max
+        ndvi_share_negative: float | None = (
+            float(neg_count / valid_count) if valid_count > 0 else None
+        )
+
+        if verbose and ndvi_min is not None and ndvi_max is not None:
             print(
                 f"[DEBUG] Composite {label}: NDVI min={ndvi_min:.4f}, "
                 f"max={ndvi_max:.4f}, share_neg={ndvi_share_negative:.3%}"
+                if ndvi_share_negative is not None
+                else f"[DEBUG] Composite {label}: NDVI min={ndvi_min:.4f}, max={ndvi_max:.4f}"
             )
 
-        out_tif = self._write_tif(label, composite)
+        # Metadata JSON (composite array is no longer needed here)
         meta_path = self._write_metadata(
             label=label,
             out_tif=out_tif,
-            composite=composite,
+            composite=None,
             scenes_used=scenes_used,
             scenes_skipped=scenes_skipped,
-            folders=folders,
+            folders=[s["folder"] for s in scenes],
             enable_cloud_masking=enable_cloud_masking,
             ndvi_min=ndvi_min,
             ndvi_max=ndvi_max,

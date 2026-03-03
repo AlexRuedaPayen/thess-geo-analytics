@@ -231,18 +231,16 @@ class BuildNdviAnomalyMapsPipeline:
                 if tif.exists():
                     climatology[m] = tif
 
-        # Collect arrays by month-of-year
-        month_arrays: Dict[int, List[np.ndarray]] = {}
+        # Collect paths + years by month-of-year
+        month_paths: Dict[int, List[Path]] = {}
         month_years: Dict[int, List[int]] = {}
-        month_template: Dict[int, Path] = {}
 
         for label, (year, month, tif_path) in monthly.items():
-            arr, _ = self._read_ndvi_as_float(tif_path, params)
-            month_arrays.setdefault(month, []).append(arr)
+            month_paths.setdefault(month, []).append(tif_path)
             month_years.setdefault(month, []).append(year)
-            month_template.setdefault(month, tif_path)
 
-        for m, arr_list in month_arrays.items():
+        # Build climatology per month, block-wise
+        for m, paths in month_paths.items():
             if m in climatology and not params.recompute_climatology:
                 # already have GeoTIFF on disk
                 continue
@@ -255,20 +253,57 @@ class BuildNdviAnomalyMapsPipeline:
                     "Pixel-wise climatology may be noisy."
                 )
 
-            stack = np.stack(arr_list, axis=0)  # (time, H, W)
-            clim_arr = np.nanmedian(stack, axis=0).astype(np.float32)
-
+            template_path = paths[0]
             out_tif = self._climatology_tif_for_month(m, params)
-            self._write_climatology_geotiff(
-                template_path=month_template[m],
-                out_path=out_tif,
-                arr=clim_arr,
-                params=params,
-            )
-            climatology[m] = out_tif
+            out_tif.parent.mkdir(parents=True, exist_ok=True)
 
-            if params.verbose:
-                print(f"[OK] monthly climatology month={m:02d} → {out_tif}")
+            # Open datasets for all paths for this month
+            datasets = [rasterio.open(p) for p in paths]
+            try:
+                # Assume all have identical grid; use first as template
+                with rasterio.open(template_path) as tmpl:
+                    profile = tmpl.profile.copy()
+
+                profile.update(
+                    dtype="float32",
+                    count=1,
+                    nodata=params.nodata,
+                    tiled=True,
+                    compress="deflate",
+                )
+
+                with rasterio.open(out_tif, "w", **profile) as dst:
+                    for (ji, window) in dst.block_windows(1):
+                        h, w = window.height, window.width
+                        block_stack: List[np.ndarray] = []
+
+                        for ds in datasets:
+                            arr = ds.read(1, window=window).astype(np.float32)
+                            nodata = ds.nodata if ds.nodata is not None else params.nodata
+                            arr = np.where(arr == nodata, np.nan, arr)
+                            block_stack.append(arr)
+
+                        stack = np.stack(block_stack, axis=0)  # (time, h, w)
+                        clim_block = np.nanmedian(stack, axis=0).astype(np.float32)
+
+                        out_block = np.where(
+                            np.isnan(clim_block),
+                            params.nodata,
+                            clim_block,
+                        ).astype(np.float32)
+
+                        dst.write(out_block, 1, window=window)
+
+                    dst.build_overviews([2, 4, 8, 16], Resampling.nearest)
+                    dst.update_tags(ns="rio_overview", resampling="nearest")
+
+                climatology[m] = out_tif
+
+                if params.verbose:
+                    print(f"[OK] monthly climatology month={m:02d} → {out_tif}")
+            finally:
+                for ds in datasets:
+                    ds.close()
 
         return climatology
 
@@ -292,17 +327,14 @@ class BuildNdviAnomalyMapsPipeline:
                 if tif.exists():
                     climatology[q] = tif
 
-        quarter_arrays: Dict[int, List[np.ndarray]] = {}
+        quarter_paths: Dict[int, List[Path]] = {}
         quarter_years: Dict[int, List[int]] = {}
-        quarter_template: Dict[int, Path] = {}
 
         for label, (year, quarter, tif_path) in quarterly.items():
-            arr, _ = self._read_ndvi_as_float(tif_path, params)
-            quarter_arrays.setdefault(quarter, []).append(arr)
+            quarter_paths.setdefault(quarter, []).append(tif_path)
             quarter_years.setdefault(quarter, []).append(year)
-            quarter_template.setdefault(quarter, tif_path)
 
-        for q, arr_list in quarter_arrays.items():
+        for q, paths in quarter_paths.items():
             if q in climatology and not params.recompute_climatology:
                 continue
 
@@ -314,20 +346,55 @@ class BuildNdviAnomalyMapsPipeline:
                     "Pixel-wise climatology may be noisy."
                 )
 
-            stack = np.stack(arr_list, axis=0)
-            clim_arr = np.nanmedian(stack, axis=0).astype(np.float32)
-
+            template_path = paths[0]
             out_tif = self._climatology_tif_for_quarter(q, params)
-            self._write_climatology_geotiff(
-                template_path=quarter_template[q],
-                out_path=out_tif,
-                arr=clim_arr,
-                params=params,
-            )
-            climatology[q] = out_tif
+            out_tif.parent.mkdir(parents=True, exist_ok=True)
 
-            if params.verbose:
-                print(f"[OK] quarterly climatology Q{q} → {out_tif}")
+            datasets = [rasterio.open(p) for p in paths]
+            try:
+                with rasterio.open(template_path) as tmpl:
+                    profile = tmpl.profile.copy()
+
+                profile.update(
+                    dtype="float32",
+                    count=1,
+                    nodata=params.nodata,
+                    tiled=True,
+                    compress="deflate",
+                )
+
+                with rasterio.open(out_tif, "w", **profile) as dst:
+                    for (ji, window) in dst.block_windows(1):
+                        h, w = window.height, window.width
+                        block_stack: List[np.ndarray] = []
+
+                        for ds in datasets:
+                            arr = ds.read(1, window=window).astype(np.float32)
+                            nodata = ds.nodata if ds.nodata is not None else params.nodata
+                            arr = np.where(arr == nodata, np.nan, arr)
+                            block_stack.append(arr)
+
+                        stack = np.stack(block_stack, axis=0)
+                        clim_block = np.nanmedian(stack, axis=0).astype(np.float32)
+
+                        out_block = np.where(
+                            np.isnan(clim_block),
+                            params.nodata,
+                            clim_block,
+                        ).astype(np.float32)
+
+                        dst.write(out_block, 1, window=window)
+
+                    dst.build_overviews([2, 4, 8, 16], Resampling.nearest)
+                    dst.update_tags(ns="rio_overview", resampling="nearest")
+
+                climatology[q] = out_tif
+
+                if params.verbose:
+                    print(f"[OK] quarterly climatology Q{q} → {out_tif}")
+            finally:
+                for ds in datasets:
+                    ds.close()
 
         return climatology
 

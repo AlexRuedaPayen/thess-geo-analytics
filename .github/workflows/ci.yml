@@ -6,6 +6,7 @@ on:
       - main
       - master
       - 'feature/**'
+      - 'fix/**'
   pull_request:
 
 jobs:
