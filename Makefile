@@ -40,8 +40,7 @@ clean-aggregated-raw:
 
 # ------------------------
 # Testing
-# -----------------------
-
+# ------------------------
 
 .PHONY: test
 test:
@@ -125,10 +124,6 @@ ndvi-pixel-features:
 	@echo "[RUN] BuildPixelFeatures"
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildPixelFeatures
 
-
-.PHONY: test
-test:
-	$(PYTHON) -m unittest discover -s tests/auto/unit -v
 # ------------------------
 # Full pipeline
 # ------------------------
@@ -154,7 +149,6 @@ full:
 	@echo "_____________________________________________________________"
 	@echo "[FULL] Step 5: NDVI aggregated composites"
 	$(MAKE) ndvi-aggregated-composites
-
 
 	@echo "_____________________________________________________________"
 	@echo "[FULL] Step 6: NDVI monthly statistics"
