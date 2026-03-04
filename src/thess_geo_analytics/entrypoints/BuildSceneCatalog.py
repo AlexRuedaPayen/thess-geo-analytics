@@ -34,89 +34,30 @@ def _as_bool01(x: str) -> bool:
     raise ValueError(f"Expected boolean 0/1 or true/false, got: {x}")
 
 
-def main() -> None:
+def main(service=None) -> None:
     cfg = load_pipeline_config()
 
-    # scene_catalog-specific knobs (cloud_cover_max, max_items, etc.)
     sc_cfg = cfg.scene_catalog_params
-
-    # Single global temporal knob, from YAML: pipeline.date_start
     pipeline_date_start = cfg.raw["pipeline"]["date_start"]
-
-    aoi_default_path = cfg.aoi_path  # <--- this is important
+    aoi_default_path = cfg.aoi_path
 
     p = argparse.ArgumentParser(
-        description=(
-            "Build Sentinel-2 scene catalog "
-            "(scenes_s2_all.csv + scenes_selected.csv)."
-        )
+        description="Build Sentinel-2 scene catalog"
     )
 
-    p.add_argument(
-        "--aoi",
-        default=str(aoi_default_path),
-        help="Path to AOI GeoJSON (default from YAML aoi.file or derived).",
-    )
+    p.add_argument("--aoi", default=str(aoi_default_path))
 
-    # Core temporal & quality params
-    p.add_argument(
-        "--date-start",
-        default=pipeline_date_start,
-        help="Earliest acquisition date (YYYY-MM-DD, default from pipeline.date_start).",
-    )
-    p.add_argument(
-        "--cloud-max",
-        type=float,
-        default=sc_cfg.get("cloud_cover_max", 20.0),
-        help="Maximum allowed cloud cover percentage.",
-    )
-    p.add_argument(
-        "--max-items",
-        type=int,
-        default=sc_cfg.get("max_items", 5000),
-        help="Max STAC items to retrieve.",
-    )
-    p.add_argument(
-        "--collection",
-        default=sc_cfg.get("collection", "sentinel-2-l2a"),
-        help="STAC collection id.",
-    )
+    p.add_argument("--date-start", default=pipeline_date_start)
+    p.add_argument("--cloud-max", type=float, default=sc_cfg.get("cloud_cover_max", 20.0))
+    p.add_argument("--max-items", type=int, default=sc_cfg.get("max_items", 5000))
+    p.add_argument("--collection", default=sc_cfg.get("collection", "sentinel-2-l2a"))
 
-    # Tile selector / coverage
-    p.add_argument(
-        "--use-tile-selector",
-        default=str(sc_cfg.get("use_tile_selector", True)),
-        help="Whether to apply tile selector (0/1, true/false).",
-    )
-    p.add_argument(
-        "--full-cover-threshold",
-        type=float,
-        default=sc_cfg.get("full_cover_threshold", 0.999),
-        help="AOI coverage threshold for a tile.",
-    )
-    p.add_argument(
-        "--allow-union",
-        default=str(sc_cfg.get("allow_union", True)),
-        help="Allow merging multiple tiles (0/1, true/false).",
-    )
-    p.add_argument(
-        "--n-anchors",
-        type=int,
-        default=sc_cfg.get("n_anchors", 24),
-        help="Number of temporal anchors.",
-    )
-    p.add_argument(
-        "--window-days",
-        type=int,
-        default=sc_cfg.get("window_days", 21),
-        help="Temporal window per anchor (days).",
-    )
-    p.add_argument(
-        "--max-union-tiles",
-        type=int,
-        default=sc_cfg.get("max_union_tiles", 20),
-        help="Maximum number of tiles to union.",
-    )
+    p.add_argument("--use-tile-selector", default=str(sc_cfg.get("use_tile_selector", True)))
+    p.add_argument("--full-cover-threshold", type=float, default=sc_cfg.get("full_cover_threshold", 0.999))
+    p.add_argument("--allow-union", default=str(sc_cfg.get("allow_union", True)))
+    p.add_argument("--n-anchors", type=int, default=sc_cfg.get("n_anchors", 24))
+    p.add_argument("--window-days", type=int, default=sc_cfg.get("window_days", 21))
+    p.add_argument("--max-union-tiles", type=int, default=sc_cfg.get("max_union_tiles", 20))
 
     args = p.parse_args()
 
@@ -138,17 +79,22 @@ def main() -> None:
         window_days=args.window_days,
     )
 
-    # Log parameters with meanings
     extra = {
         "mode": cfg.mode,
         "region": cfg.region_name,
         "aoi_id": cfg.aoi_id,
         "aoi_path": str(aoi_path),
     }
+
     log_parameters("BuildSceneCatalog", params, PARAMETER_DOCS, extra)
 
-    pipeline = BuildSceneCatalogPipeline(aoi_path=aoi_path)
+    pipeline = BuildSceneCatalogPipeline(
+        aoi_path=aoi_path,
+        service=service,
+    )
+
     out = pipeline.run(params)
+
     print(f"[OK] Pipeline returned: {out}")
 
 

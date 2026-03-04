@@ -37,15 +37,16 @@ jobs:
         run: |
           python -m tests.fixtures.generators.SceneCatalogTestDataGenerator
 
-      # Run ONLY the unit tests that passed in your local run (+ downsampling)
-      - name: Run selected unit tests
+      # Run ONLY the unit tests that passed in your local run (+ downsampling + pipeline smoke)
+      - name: Run selected tests
         run: |
           python -m unittest \
             tests.auto.unit.test_BuildSceneCatalogPipelineTest \
             tests.auto.unit.test_BuildPixelFeaturesPipelineTest \
             tests.auto.unit.test_NdviReconstructionFromSyntheticBandsTest \
             tests.auto.unit.test_TimestampsAggregationBuilderTest \
-            tests.auto.unit.test_DownsampleAggregatedTimestampsBuilderTest
+            tests.auto.unit.test_DownsampleAggregatedTimestampsBuilderTest \
+            tests.auto.integration.test_WholePipelineTest
 
       - name: Upload test artifacts
         if: always()

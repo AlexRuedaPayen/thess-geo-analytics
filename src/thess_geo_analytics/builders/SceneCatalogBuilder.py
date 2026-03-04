@@ -93,8 +93,17 @@ class SceneCatalogBuilder:
           coverage_frac      (float)
           coverage_area      (float)
         """
-        rows: List[Dict[str, Any]] = []
+        cols = [
+            "anchor_date",
+            "acq_datetime",
+            "tile_ids",
+            "tiles_count",
+            "cloud_score",
+            "coverage_frac",
+            "coverage_area",
+        ]
 
+        rows: List[Dict[str, Any]] = []
         for s in selected_scenes:
             tile_ids: List[str] = []
             for it in s.items:
@@ -111,12 +120,12 @@ class SceneCatalogBuilder:
                     "tiles_count": len(tile_ids),
                     "cloud_score": float(s.cloud_score),
                     "coverage_frac": float(s.coverage_frac),
-                    # may be missing on older objects, so guard with getattr
                     "coverage_area": float(getattr(s, "coverage_area", float("nan"))),
                 }
             )
 
-        df = pd.DataFrame(rows)
+        df = pd.DataFrame(rows, columns=cols)
+
         if not df.empty:
             df["anchor_date"] = pd.to_datetime(df["anchor_date"]).dt.date
             df["acq_datetime"] = pd.to_datetime(df["acq_datetime"], utc=True)
@@ -156,37 +165,41 @@ class SceneCatalogBuilder:
           coverage_frac_union   (same for all tiles in a SelectedScene)
           coverage_area_union   (same for all tiles in a SelectedScene)
         """
-        rows: List[Dict[str, Any]] = []
+        base_cols = [
+            "anchor_date",
+            "acq_datetime",
+            "id",
+            "datetime",
+            "cloud_cover",
+            "platform",
+            "constellation",
+            "collection",
+            "coverage_frac_union",
+            "coverage_area_union",
+        ]
 
+        rows: List[Dict[str, Any]] = []
         for s in selected_scenes:
             for it in s.items:
-                # Let the service produce the standard catalog row for this one item
                 one_df = self.service.items_to_dataframe([it], collection=collection)
                 if one_df.empty:
                     continue
 
                 rec = dict(one_df.iloc[0])
-
-                # Attach anchor information
                 rec["anchor_date"] = s.anchor_date.isoformat()
                 rec["acq_datetime"] = s.acq_dt.isoformat()
-
-                # Union coverage information for this SelectedScene
                 rec["coverage_frac_union"] = float(s.coverage_frac)
                 rec["coverage_area_union"] = float(getattr(s, "coverage_area", float("nan")))
-
                 rows.append(rec)
 
         df = pd.DataFrame(rows)
-        if df.empty:
-            return df
 
-        # Normalise date / datetime types
+        if df.empty:
+            return pd.DataFrame(columns=base_cols)
+
         df["anchor_date"] = pd.to_datetime(df["anchor_date"]).dt.date
         df["acq_datetime"] = pd.to_datetime(df["acq_datetime"], utc=True)
 
-        # Nice column ordering: anchor/acq first, then others
         leading = ["anchor_date", "acq_datetime"]
-        # keep order but move leading to front
         other_cols = [c for c in df.columns if c not in leading]
         return df[leading + other_cols]

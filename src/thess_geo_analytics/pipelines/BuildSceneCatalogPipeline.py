@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -32,9 +32,37 @@ class BuildSceneCatalogParams:
 
 
 class BuildSceneCatalogPipeline:
-    def __init__(self, aoi_path: Path, builder: SceneCatalogBuilder | None = None) -> None:
+    """
+    Builds:
+      - scenes_catalog.csv
+      - scenes_selected.csv
+      - time_serie.csv
+      - timestamps_coverage.csv
+
+    NOTE:
+      Do NOT assume any fixed directory like RepoPaths.TABLES.
+      Always mkdir() on the actual output file parent, so this works
+      both in real runs and in tests that override THESS_RUN_ROOT.
+    """
+
+    def __init__(
+        self,
+        aoi_path: Path,
+        builder: SceneCatalogBuilder | None = None,
+        service=None,
+    ) -> None:
         self.aoi_path = aoi_path
-        self.builder = builder or SceneCatalogBuilder()
+
+        if builder is not None:
+            self.builder = builder
+        else:
+            # Option 1 style: allow service injection for tests
+            self.builder = SceneCatalogBuilder(service=service)
+
+    @staticmethod
+    def _ensure_parent(p: Path) -> Path:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
 
     def run(self, params: BuildSceneCatalogParams) -> Path:
         # Use absolute date_start instead of "days ago"
@@ -59,14 +87,16 @@ class BuildSceneCatalogPipeline:
             date_end=end.isoformat(),
             params=stac_params,
         )
-        RepoPaths.TABLES.mkdir(parents=True, exist_ok=True)
 
-        raw_csv = RepoPaths.table("scenes_catalog.csv")
-        selected_csv = RepoPaths.table("scenes_selected.csv")
-        ts_csv = RepoPaths.table("time_serie.csv")
-        ts_cov_csv = RepoPaths.table("timestamps_coverage.csv")   # NEW
+        # Resolve outputs (and ensure directories exist)
+        raw_csv = self._ensure_parent(RepoPaths.table("scenes_catalog.csv"))
+        selected_csv = self._ensure_parent(RepoPaths.table("scenes_selected.csv"))
+        ts_csv = self._ensure_parent(RepoPaths.table("time_serie.csv"))
+        ts_cov_csv = self._ensure_parent(RepoPaths.table("timestamps_coverage.csv"))
 
+        # ------------------------------------------------------------------
         # 2) Always write RAW catalog
+        # ------------------------------------------------------------------
         raw_df = (
             self.builder.build_scene_catalog_df(items, collection=params.collection)
             if items
@@ -113,7 +143,6 @@ class BuildSceneCatalogPipeline:
                     ]
                 ).to_csv(ts_csv, index=False)
 
-                # also write empty coverage table
                 pd.DataFrame(
                     columns=[
                         "acq_datetime",
@@ -131,7 +160,9 @@ class BuildSceneCatalogPipeline:
 
             return raw_csv
 
+        # ------------------------------------------------------------------
         # 3) Selection -> selected_scenes (regular anchors)
+        # ------------------------------------------------------------------
         aoi_shp = shape(aoi_geom_geojson)
 
         selector = TileSelector(
@@ -141,11 +172,9 @@ class BuildSceneCatalogPipeline:
         )
 
         # ------------------------------------------------------------------
-        # 3a) per-timestamp coverage table (dumped vs kept timestamps)
+        # 3a) per-timestamp coverage table
         # ------------------------------------------------------------------
-        infos, _, _, aoi_area_value = selector._coverage_infos(
-            items, aoi_shp.buffer(0.05)
-        )
+        infos, _, _, aoi_area_value = selector._coverage_infos(items, aoi_shp.buffer(0.05))
 
         cov_rows = []
         if infos and aoi_area_value > 0:
@@ -201,31 +230,31 @@ class BuildSceneCatalogPipeline:
         )
 
         # ------------------------------------------------------------------
-        # 3b) FILTER items to timestamps that *can* reach full coverage
+        # 3b) FILTER items to timestamps that can reach full coverage
         # ------------------------------------------------------------------
         if cov_df.empty:
             print("[WARN] No timestamps with any coverage; skipping TileSelector.")
             items_for_selector: list = []
         else:
             good_ts = set(
-                pd.to_datetime(
-                    cov_df.loc[cov_df["has_full_cover"], "acq_datetime"]
-                ).dt.to_pydatetime()
+                pd.to_datetime(cov_df.loc[cov_df["has_full_cover"], "acq_datetime"])
+                .dt.to_pydatetime()
             )
-            print(f"[INFO] Timestamps kept for TileSelector (has_full_cover=True): {len(good_ts)}")
+            print(
+                f"[INFO] Timestamps kept for TileSelector (has_full_cover=True): {len(good_ts)}"
+            )
 
             items_for_selector = []
             if good_ts:
                 for it in items:
                     try:
-                        dt = selector._get_datetime(it)  # reuse same logic as TileSelector
+                        dt = selector._get_datetime(it)
                     except Exception:
                         continue
                     if dt in good_ts:
                         items_for_selector.append(it)
 
         if not items_for_selector:
-            # Nothing to select on → write empty selected/time_serie but keep raw & coverage
             print("[WARN] No items belong to timestamps with full coverage; outputs will be empty.")
 
             pd.DataFrame(
@@ -257,9 +286,8 @@ class BuildSceneCatalogPipeline:
             return ts_csv
 
         # ------------------------------------------------------------------
-        # 4) Call TileSelector on *filtered* items (no bad timestamps)
+        # 4) Call TileSelector on filtered items
         # ------------------------------------------------------------------
-        # You can keep the try/except as a safety net, but it should not trigger now.
         try:
             selected_scenes = selector.select_regular_time_series(
                 items=items_for_selector,
@@ -277,29 +305,45 @@ class BuildSceneCatalogPipeline:
             )
             selected_scenes = []
 
-        # 5) Write scenes_selected (tile-level)
+        # 5) scenes_selected (tile-level)
         selected_df = self.builder.selected_scenes_to_selected_tiles_df(
             selected_scenes,
             collection=params.collection,
         )
         selected_df.to_csv(selected_csv, index=False)
 
-        # 6) Write time_serie (anchor-level)
+        # 6) time_serie (anchor-level)
         ts_df = self.builder.selected_scenes_to_time_serie_df(selected_scenes)
-        ts_df.to_csv(ts_csv, index=False)
 
+
+        if ts_df.empty:
+            ts_df = pd.DataFrame(
+                columns=[
+                    "anchor_date",
+                    "acq_datetime",
+                    "tile_ids",
+                    "tiles_count",
+                    "cloud_score",
+                    "coverage_frac",
+                    "coverage_area",
+                ]
+            )
+
+        ts_df.to_csv(ts_csv, index=False)
         print(f"[OUTPUT] scenes_selected exported => {selected_csv}")
         print(f"[OUTPUT] time_serie exported     => {ts_csv}")
         print(f"[INFO] Anchors requested: {params.n_anchors}, anchors with selection: {len(ts_df)}")
 
         if not ts_df.empty:
-            print(
-                f"[INFO] Coverage frac: min={ts_df['coverage_frac'].min():.3f} "
-                f"median={ts_df['coverage_frac'].median():.3f} max={ts_df['coverage_frac'].max():.3f}"
-            )
-            print(
-                f"[INFO] Cloud score:   min={ts_df['cloud_score'].min():.2f} "
-                f"median={ts_df['cloud_score'].median():.2f} max={ts_df['cloud_score'].max():.2f}"
-            )
+            if "coverage_frac" in ts_df.columns:
+                print(
+                    f"[INFO] Coverage frac: min={ts_df['coverage_frac'].min():.3f} "
+                    f"median={ts_df['coverage_frac'].median():.3f} max={ts_df['coverage_frac'].max():.3f}"
+                )
+            if "cloud_score" in ts_df.columns:
+                print(
+                    f"[INFO] Cloud score:   min={ts_df['cloud_score'].min():.2f} "
+                    f"median={ts_df['cloud_score'].median():.2f} max={ts_df['cloud_score'].max():.2f}"
+                )
 
         return ts_csv
