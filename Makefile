@@ -57,6 +57,7 @@ help:
 	@echo "  make scene-catalog              - build Sentinel-2 scene catalog"
 	@echo "  make assets-manifest            - build assets_manifest_selected.csv"
 	@echo "  make timestamps-aggregation     - merge tiles into timestamp rasters"
+	@echo "  make downsample-aggregated      - downsample aggregated timestamp rasters"
 	@echo "  make ndvi-aggregated-composites - build NDVI composites"
 	@echo "  make monthly-statistics         - NDVI period stats + monthly series + plot"
 	@echo "  make ndvi-climatology           - build NDVI climatology baseline"
@@ -93,6 +94,12 @@ timestamps-aggregation:
 	@echo "_____________________________________________________________"
 	@echo "[RUN] BuildAggregatedTimestamps"
 	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildAggregatedTimestamps
+
+.PHONY: downsample-aggregated
+downsample-aggregated:
+	@echo "_____________________________________________________________"
+	@echo "[RUN] DownsampleAggregatedTimestamps"
+	$(PYTHON) -m thess_geo_analytics.entrypoints.DownsampleAggregatedTimestamps
 
 .PHONY: ndvi-aggregated-composites
 ndvi-aggregated-composites:
@@ -147,23 +154,27 @@ full:
 	$(MAKE) timestamps-aggregation
 
 	@echo "_____________________________________________________________"
-	@echo "[FULL] Step 5: NDVI aggregated composites"
+	@echo "[FULL] Step 5: Downsample aggregated timestamps"
+	$(MAKE) downsample-aggregated
+
+	@echo "_____________________________________________________________"
+	@echo "[FULL] Step 6: NDVI aggregated composites"
 	$(MAKE) ndvi-aggregated-composites
 
 	@echo "_____________________________________________________________"
-	@echo "[FULL] Step 6: NDVI monthly statistics"
+	@echo "[FULL] Step 7: NDVI monthly statistics"
 	$(MAKE) monthly-statistics
 
 	@echo "_____________________________________________________________"
-	@echo "[FULL] Step 7: NDVI climatology"
+	@echo "[FULL] Step 8: NDVI climatology"
 	$(MAKE) ndvi-climatology
 
 	@echo "_____________________________________________________________"
-	@echo "[FULL] Step 8: NDVI anomaly maps"
+	@echo "[FULL] Step 9: NDVI anomaly maps"
 	$(MAKE) ndvi-anomaly-maps
 
 	@echo "_____________________________________________________________"
-	@echo "[FULL] Step 9: Pixel features"
+	@echo "[FULL] Step 10: Pixel features"
 	$(MAKE) ndvi-pixel-features
 
 	@echo "✓ FULL EO/NDVI pipeline completed."
