@@ -8,10 +8,17 @@ from pathlib import Path
 import pandas as pd
 
 from thess_geo_analytics.core.pipeline_config import load_pipeline_config
+
 from thess_geo_analytics.pipelines.ExtractAoiPipeline import ExtractAoiPipeline
+
 from thess_geo_analytics.pipelines.BuildSceneCatalogPipeline import (
     BuildSceneCatalogPipeline,
     BuildSceneCatalogParams,
+)
+
+from thess_geo_analytics.pipelines.BuildAssetsManifestPipeline import (
+    BuildAssetsManifestPipeline,
+    BuildAssetsManifestParams,
 )
 
 from tests.mocks.MockNutsService import MockNutsService
@@ -91,9 +98,35 @@ class WholePipelineTest(unittest.TestCase):
         self.assertGreater(len(sel), 0, "scenes_selected.csv should not be empty")
         self.assertGreater(len(ts), 0, "time_serie.csv should not be empty")
 
-    # ------------------------------
+    # -------------------------------------------------
+    # Step 3 — Assets manifest
+    # -------------------------------------------------
+
+
+    def _step_03_assets_manifest(self):
+
+        from thess_geo_analytics.entrypoints.BuildAssetsManifest import run
+        from tests.mocks.MockCdseStacService import MockCdseStacService
+        from tests.mocks.MockCdseAssetDownloader import MockCdseAssetDownloader
+
+
+
+        run(
+            stac_service=MockCdseStacService(),
+            asset_downloader=MockCdseAssetDownloader(),
+        )
+
+        tables = self.session_root / "outputs" / "tables"
+
+        manifest = tables / "assets_manifest_selected.csv"
+        self.assertTrue(manifest.exists())
+
+    # -------------------------------------------------
     # Orchestrator
-    # ------------------------------
+    # -------------------------------------------------
+
     def test_pipeline_smoke(self) -> None:
+
         aoi_path = self._step_01_extract_aoi()
         self._step_02_scene_catalog(aoi_path)
+        self._step_03_assets_manifest()
