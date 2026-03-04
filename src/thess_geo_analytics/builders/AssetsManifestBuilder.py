@@ -7,6 +7,7 @@ import json
 
 import pandas as pd
 
+from thess_geo_analytics.utils.RepoPaths import RepoPaths
 from thess_geo_analytics.core.settings import CACHE_S2_DIR, DEFAULT_COLLECTION
 from thess_geo_analytics.services.CdseStacService import CdseStacService
 from thess_geo_analytics.services.StacAssetResolver import StacAssetResolver
@@ -149,7 +150,8 @@ class AssetsManifestBuilder:
 
             hrefs = self.resolver.resolve_b04_b08_scl(item_json)
 
-            scene_dir = params.cache_root / item_id
+            scene_dir = RepoPaths.run_root() / "raw" / "s2" / item_id
+            scene_dir.mkdir(parents=True, exist_ok=True)
 
             rows.append(
                 {
