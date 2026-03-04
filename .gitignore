@@ -1,42 +1,44 @@
 ###############################
-#  Python / Virtualenv / Build
+# Python / Virtualenv / Build
 ###############################
 .venv/
 venv/
 env/
 ENV/
+
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
 
 *.egg-info/
-*.eggs/
+.eggs/
 build/
 dist/
 *.spec
+pip-wheel-metadata/
 
 ###############################
-#  Jupyter
+# Jupyter
 ###############################
 .ipynb_checkpoints/
 
 ###############################
-#  OS / Editor junk
+# OS / Editor junk
 ###############################
 .DS_Store
 Thumbs.db
 *.swp
 *.swo
+.vscode/
+.idea/
 
 ###############################
-#  Environment variables
+# Environment variables
 ###############################
 .env
 *.env
 
 ###############################
-#  Application Data
+# Application Data
 ###############################
 outputs/
 data_raw/
@@ -46,22 +48,21 @@ DATA_LAKE/
 old/
 
 ###############################
-#  Tests
+# Pipeline runs / generated outputs
 ###############################
-# Static fixtures (tracked):
-#   tests/fixtures/data/  ← KEEP IN GIT
-#
-# Generated fixtures (ignored):
+tests/artifacts/
+runs/
+sessions/
+
+###############################
+# Generated test fixtures
+###############################
 tests/fixtures/generated/
 
-# Manual QA artefacts (PNGs, CSVs, logs…)
-tests/artifacts/
-
 ###############################
-#  AOI and Geometries
+# AOI and temporary geometries
 ###############################
-# Ignore auto-produced AOI files in root or under aoi/
-# but allow static test data under tests/fixtures/data
+# Ignore auto-produced AOIs
 aoi/*.geojson
 aoi/*.shp
 aoi/*.dbf
@@ -69,9 +70,16 @@ aoi/*.shx
 aoi/*.prj
 
 ###############################
-#  Logs & temp files
+# Logs & temp files
 ###############################
 *.log
 *.tmp
 *.bak
 *.old
+
+###############################
+# Keep STATIC fixtures tracked
+###############################
+!tests/fixtures/
+!tests/fixtures/data/
+!tests/fixtures/offline_cdse/
