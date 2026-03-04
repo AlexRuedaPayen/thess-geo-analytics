@@ -37,14 +37,15 @@ jobs:
         run: |
           python -m tests.fixtures.generators.SceneCatalogTestDataGenerator
 
-      # Run ONLY the unit tests that passed in your local run
+      # Run ONLY the unit tests that passed in your local run (+ downsampling)
       - name: Run selected unit tests
         run: |
           python -m unittest \
             tests.auto.unit.test_BuildSceneCatalogPipelineTest \
             tests.auto.unit.test_BuildPixelFeaturesPipelineTest \
             tests.auto.unit.test_NdviReconstructionFromSyntheticBandsTest \
-            tests.auto.unit.test_TimestampsAggregationBuilderTest
+            tests.auto.unit.test_TimestampsAggregationBuilderTest \
+            tests.auto.unit.test_DownsampleAggregatedTimestampsBuilderTest
 
       - name: Upload test artifacts
         if: always()
@@ -53,6 +54,7 @@ jobs:
           name: test-artifacts-${{ matrix.python-version }}
           path: |
             tests/fixtures/generated/scene_catalog/
+            tests/fixtures/generated/downsample_builder/
             tests/artifacts/
 
   docker-build:
