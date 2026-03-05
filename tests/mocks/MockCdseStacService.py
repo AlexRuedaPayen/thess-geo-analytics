@@ -28,9 +28,17 @@ class MockCdseStacService:
         scl_res = 20
 
         assets: Dict[str, Dict[str, Any]] = {
+            "B04": {"href": f"mock://{item_id}/B04"},
+            "B08": {"href": f"mock://{item_id}/B08"},
+            "SCL": {"href": f"mock://{item_id}/SCL"},
+
             f"B04_{b_res}m": {"href": f"mock://{item_id}/B04"},
             f"B08_{b_res}m": {"href": f"mock://{item_id}/B08"},
             f"SCL_{scl_res}m": {"href": f"mock://{item_id}/SCL"},
+
+            f"b04_{b_res}m": {"href": f"mock://{item_id}/B04"},
+            f"b08_{b_res}m": {"href": f"mock://{item_id}/B08"},
+            f"scl_{scl_res}m": {"href": f"mock://{item_id}/SCL"},
         }
 
         # Minimal STAC item
