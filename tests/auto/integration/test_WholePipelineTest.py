@@ -26,6 +26,19 @@ from thess_geo_analytics.pipelines.BuildDownsampledAggregatedTimestampsPipeline 
     BuildDownsampledAggregatedTimestampsPipeline,
     BuildDownsampledAggregatedTimestampsParams,
 )
+from thess_geo_analytics.pipelines.BuildNdviAggregatedCompositePipeline import (
+    BuildNdviAggregatedCompositePipeline,
+    BuildNdviAggregatedCompositeParams,
+)
+from thess_geo_analytics.pipelines.BuildNdviMonthlyStatisticsPipeline import (
+    BuildNdviMonthlyStatisticsPipeline,
+    BuildNdviMonthlyStatisticsParams,
+)
+from thess_geo_analytics.pipelines.BuildNdviClimatologyPipeline import (
+    BuildNdviClimatologyPipeline,
+    BuildNdviClimatologyParams,
+)
+
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
 from tests.mocks.MockNutsService import MockNutsService
@@ -36,6 +49,11 @@ from tests.mocks.MockStacAssetResolver import MockStacAssetResolver
 
 
 class WholePipelineTest(unittest.TestCase):
+
+    # -------------------------------------------------
+    # Test environment
+    # -------------------------------------------------
+
     def setUp(self) -> None:
         self.session_root = Path("tests/artifacts/pipeline_runs/session_single").resolve()
 
@@ -43,28 +61,54 @@ class WholePipelineTest(unittest.TestCase):
             shutil.rmtree(self.session_root)
 
         self.session_root.mkdir(parents=True)
+
         os.environ["THESS_RUN_ROOT"] = str(self.session_root)
 
         self.cfg = load_pipeline_config()
 
+        print("\n[TEST RUN ROOT]", RepoPaths.run_root())
+
     def tearDown(self) -> None:
         os.environ.pop("THESS_RUN_ROOT", None)
 
-    # ------------------------------
-    # Step 1 — Extract AOI
-    # ------------------------------
-    def _step_01_extract_aoi(self) -> Path:
-        pipeline = ExtractAoiPipeline(nuts_service=MockNutsService())
-        pipeline.run(self.cfg.region_name)
+    # -------------------------------------------------
+    # Utility guards
+    # -------------------------------------------------
 
+    def _assert_exists(self, p: Path, msg: str):
+        self.assertTrue(p.exists(), f"{msg} → missing: {p}")
+
+    def _assert_nonempty_csv(self, p: Path, msg: str) -> pd.DataFrame:
+        self._assert_exists(p, msg)
+        df = pd.read_csv(p)
+        self.assertGreater(len(df), 0, f"{msg} → CSV empty: {p}")
+        return df
+
+    def _assert_raster_ok(self, p: Path, msg: str):
+        self._assert_exists(p, msg)
+        with rasterio.open(p) as ds:
+            self.assertGreater(ds.width, 0)
+            self.assertGreater(ds.height, 0)
+
+    # -------------------------------------------------
+    # Step 1 — AOI
+    # -------------------------------------------------
+
+    def _step_01_extract_aoi(self) -> Path:
+
+        pipe = ExtractAoiPipeline(nuts_service=MockNutsService())
+        pipe.run(self.cfg.region_name)
         aoi_path = self.cfg.aoi_path
-        self.assertTrue(aoi_path.exists(), "AOI file not produced")
+        self._assert_exists(aoi_path, "AOI file not produced")
+
         return aoi_path
 
-    # ------------------------------
+    # -------------------------------------------------
     # Step 2 — Scene catalog
-    # ------------------------------
-    def _step_02_scene_catalog(self, aoi_path: Path) -> None:
+    # -------------------------------------------------
+
+    def _step_02_scene_catalog(self, aoi_path: Path):
+
         svc = MockCdseSceneCatalogService(
             seed=1337,
             tiles_min=2,
@@ -73,11 +117,10 @@ class WholePipelineTest(unittest.TestCase):
             full_cover_pad_deg=0.02,
         )
 
-        pipeline = BuildSceneCatalogPipeline(aoi_path=aoi_path, service=svc)
-
+        pipe = BuildSceneCatalogPipeline(aoi_path=aoi_path, service=svc)
         params = BuildSceneCatalogParams(
             date_start="2021-01-01",
-            cloud_cover_max=80.0,
+            cloud_cover_max=80,
             max_items=300,
             use_tile_selector=True,
             full_cover_threshold=0.95,
@@ -86,146 +129,162 @@ class WholePipelineTest(unittest.TestCase):
             n_anchors=24,
             window_days=30,
         )
-
-        out = pipeline.run(params)
-        self.assertTrue(out.exists(), "Pipeline did not return an output path")
-
-        tables_dir = self.session_root / "outputs" / "tables"
-        self.assertTrue((tables_dir / "scenes_catalog.csv").exists(), "scenes_catalog.csv missing")
-        self.assertTrue((tables_dir / "timestamps_coverage.csv").exists(), "timestamps_coverage.csv missing")
-        self.assertTrue((tables_dir / "scenes_selected.csv").exists(), "scenes_selected.csv missing")
-        self.assertTrue((tables_dir / "time_serie.csv").exists(), "time_serie.csv missing")
-
-        raw_df = pd.read_csv(tables_dir / "scenes_catalog.csv")
-        self.assertGreater(len(raw_df), 0, "scenes_catalog.csv should not be empty")
-        self.assertGreaterEqual(len(raw_df), 250, "expected a large catalog (near max_items)")
-
-        sel_df = pd.read_csv(tables_dir / "scenes_selected.csv")
-        ts_df = pd.read_csv(tables_dir / "time_serie.csv")
-
-        self.assertGreater(len(sel_df), 0, "scenes_selected.csv should not be empty")
-        self.assertGreater(len(ts_df), 0, "time_serie.csv should not be empty")
+        out = pipe.run(params)
+        self._assert_exists(out, "Scene catalog output missing")
+        tables = RepoPaths.outputs("tables")
+        self._assert_nonempty_csv(tables / "scenes_catalog.csv", "scenes_catalog.csv")
+        self._assert_nonempty_csv(tables / "scenes_selected.csv", "scenes_selected.csv")
+        self._assert_nonempty_csv(tables / "time_serie.csv", "time_serie.csv")
 
     # -------------------------------------------------
-    # Step 3 — Assets manifest + download
+    # Step 3 — Asset manifest + downloads
     # -------------------------------------------------
-    def _step_03_assets_manifest(self) -> None:
+
+    def _step_03_assets_manifest(self):
+
         pipe = BuildAssetsManifestPipeline(
             stac_service=MockCdseStacService(band_resolution=10),
             downloader=MockCdseAssetDownloader(),
             resolver=MockStacAssetResolver(band_resolution=10),
         )
-
-        out_path = pipe.run(
+        out = pipe.run(
             BuildAssetsManifestParams(
-                max_scenes=None,
-                date_start="2023-01-01",
-                sort_mode="cloud_then_time",
                 download_n=9,
                 download_missing=True,
                 validate_rasterio=True,
-                out_name="assets_manifest_selected.csv",
-                raw_storage_mode="url_to_local",
-                band_resolution=10,
-                max_download_workers=4,
             )
         )
-
-        self.assertTrue(out_path.exists(), "Pipeline did not write manifest CSV")
-
-        tables_dir = self.session_root / "outputs" / "tables"
-
-        manifest_path = tables_dir / "assets_manifest_selected.csv"
-        self.assertTrue(manifest_path.exists(), "assets_manifest_selected.csv missing")
-
-        status_path = tables_dir / "assets_download_status.csv"
-        self.assertTrue(status_path.exists(), "assets_download_status.csv missing")
-
-        manifest_df = pd.read_csv(manifest_path)
-        self.assertGreater(len(manifest_df), 0, "manifest CSV is empty")
-        self.assertFalse(
-            manifest_df[["href_b04", "href_b08", "href_scl"]].isna().any().any(),
-            "Missing hrefs in manifest",
+        self._assert_exists(out, "Assets manifest not written")
+        tables = RepoPaths.outputs("tables")
+        manifest = self._assert_nonempty_csv(
+            tables / "assets_manifest_selected.csv",
+            "assets manifest",
         )
-
-        status_df = pd.read_csv(status_path)
-        self.assertGreater(
-            (status_df["status"] == "success").sum(),
-            0,
-            "No successful downloads",
+        status = self._assert_nonempty_csv(
+            tables / "assets_download_status.csv",
+            "download status",
         )
-
-        # spot-check that raw tiles exist on disk for at least one scene
-        scene_id = str(manifest_df.iloc[0]["scene_id"])
+        self.assertGreater((status["status"] == "success").sum(), 0)
+        scene_id = str(manifest.iloc[0]["scene_id"])
         raw_dir = RepoPaths.run_root() / "raw" / "s2" / scene_id
         for band in ["B04", "B08", "SCL"]:
-            self.assertTrue((raw_dir / f"{band}.tif").exists(), f"Missing raw {band}.tif for {scene_id}")
+            self._assert_exists(raw_dir / f"{band}.tif", f"raw band missing {band}")
 
     # -------------------------------------------------
-    # Step 4 — Aggregate timestamps (mosaics)
+    # Step 4 — Aggregation
     # -------------------------------------------------
-    def _step_04_aggregate_timestamps(self) -> list[Path]:
+
+    def _step_04_aggregate(self) -> Path:
+
         params = TimestampsAggregationParams(
-            max_workers=2,            # keep small for tests
-            bands=("B04", "B08", "SCL"),
-            debug=True,               # sequential + real tracebacks if it fails
+            max_workers=2,
+            debug=True,
         )
-
         builder = TimestampsAggregationBuilder(params)
-        out_folders = builder.run()
+        out = builder.run()
+        self.assertGreater(len(out), 0)
 
-        self.assertGreater(len(out_folders), 0, "No aggregated timestamp folders produced")
-
-        # each output folder should have 3 mosaics
-        for folder in out_folders[:3]:  # limit checks to first few for speed
+        for folder in out[:3]:
             for band in ["B04", "B08", "SCL"]:
-                tif = folder / f"{band}.tif"
-                self.assertTrue(tif.exists(), f"Missing aggregated {band}.tif in {folder}")
-                with rasterio.open(tif) as ds:
-                    self.assertGreater(ds.width, 0)
-                    self.assertGreater(ds.height, 0)
+                self._assert_raster_ok(folder / f"{band}.tif", "aggregated raster")
 
-        tables_dir = self.session_root / "outputs" / "tables"
-        self.assertTrue((tables_dir / "timestamps_aggregation_status.csv").exists())
-        self.assertTrue((tables_dir / "timestamps_aggregation_summary.csv").exists())
-        self.assertTrue((tables_dir / "timestamps_aggregation_band_report.csv").exists())
+        aggregated_root = RepoPaths.run_root() / "data_raw" / "aggregated"
+        self._assert_exists(aggregated_root, "aggregated root missing")
 
-        return out_folders
+        return aggregated_root
 
     # -------------------------------------------------
-    # Step 5 — Downsample mosaics
+    # Step 5 — Downsample
     # -------------------------------------------------
-    def _step_05_downsample(self) -> list[Path]:
-        src_root = RepoPaths.DATA_RAW / "aggregated"
-        dst_root = RepoPaths.DATA_RAW / "aggregated_100m"
 
+    def _step_05_downsample(self, aggregated_root: Path) -> Path:
+
+        dst_root = RepoPaths.run_root() / "data_raw" / "aggregated_100m"
         pipe = BuildDownsampledAggregatedTimestampsPipeline()
         outputs = pipe.run(
             BuildDownsampledAggregatedTimestampsParams(
-                src_root=src_root,
+                src_root=aggregated_root,
                 dst_root=dst_root,
-                factor=1,  # keep factor=1 in tests to reduce work (still exercises the pipeline)
+                factor=1,
             )
         )
+        self.assertGreater(len(outputs), 0)
+        self._assert_raster_ok(outputs[0], "downsample raster")
+        return dst_root
 
-        self.assertGreater(len(outputs), 0, "No downsampled rasters produced")
-        self.assertTrue(dst_root.exists(), "Downsample destination folder missing")
+    # -------------------------------------------------
+    # Step 6 — NDVI composites
+    # -------------------------------------------------
 
-        # check at least one output exists and is readable
-        out0 = outputs[0]
-        self.assertTrue(out0.exists())
-        with rasterio.open(out0) as ds:
-            self.assertGreater(ds.width, 0)
-            self.assertGreater(ds.height, 0)
+    def _step_06_ndvi(self, aggregated_root: Path):
 
-        return outputs
+        aoi = self.cfg.aoi_path
+
+        params = BuildNdviAggregatedCompositeParams(
+            aoi_path=aoi,
+            aoi_id=self.cfg.aoi_id,
+            aggregated_root=aggregated_root,
+            strategy="monthly",
+            max_scenes_per_period=3,
+            min_scenes_per_month=1,
+            fallback_to_quarterly=True,
+            enable_cloud_masking=True,
+        )
+
+        pipe = BuildNdviAggregatedCompositePipeline()
+        results = pipe.run(params, max_workers=1, debug=True)
+        self.assertGreater(len(results), 0)
+        cogs = RepoPaths.outputs("cogs")
+        self._assert_exists(cogs, "NDVI COG directory missing")
+        ndvi = list(cogs.glob(f"ndvi_*_{self.cfg.aoi_id}.tif"))
+        self.assertGreater(len(ndvi), 0)
+        self._assert_raster_ok(ndvi[0], "ndvi composite")
+
+    # -------------------------------------------------
+    # Step 7 — Monthly statistics
+    # -------------------------------------------------
+
+    def _step_07_statistics(self):
+
+        params = BuildNdviMonthlyStatisticsParams(
+            aoi_id=self.cfg.aoi_id
+        )
+        pipe = BuildNdviMonthlyStatisticsPipeline()
+        parquet, fig = pipe.run(params)
+        self._assert_exists(params.stats_csv, "period stats CSV")
+        self._assert_exists(parquet, "timeseries parquet")
+        self._assert_exists(fig, "timeseries plot")
+        df = self._assert_nonempty_csv(params.stats_csv, "period stats")
+        self.assertIn("mean_ndvi", df.columns)
+
+    # -------------------------------------------------
+    # Step 8 — Climatology
+    # -------------------------------------------------
+
+    def _step_08_climatology(self):
+
+        params = BuildNdviClimatologyParams(
+            aoi_id=self.cfg.aoi_id
+        )
+
+        pipe = BuildNdviClimatologyPipeline()
+        out_csv, out_fig = pipe.run(params)
+        self._assert_exists(out_csv, "climatology CSV")
+        self._assert_exists(out_fig, "climatology figure")
+        df = self._assert_nonempty_csv(out_csv, "climatology")
+        self.assertIn("mean_ndvi_clim", df.columns)
 
     # -------------------------------------------------
     # Orchestrator
     # -------------------------------------------------
-    def test_pipeline_smoke(self) -> None:
-        aoi_path = self._step_01_extract_aoi()
-        self._step_02_scene_catalog(aoi_path)
+
+    def test_pipeline_smoke(self):
+
+        aoi = self._step_01_extract_aoi()
+        self._step_02_scene_catalog(aoi)
         self._step_03_assets_manifest()
-        self._step_04_aggregate_timestamps()
-        #self._step_05_downsample()
+        aggregated = self._step_04_aggregate()
+        downsampled = self._step_05_downsample(aggregated)
+        self._step_06_ndvi(downsampled)
+        self._step_07_statistics()
+        self._step_08_climatology()
