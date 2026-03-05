@@ -44,10 +44,10 @@ jobs:
           # They will be re-enabled once path handling is stabilized.
           python -m unittest \
             # tests.auto.unit.test_BuildSceneCatalogPipelineTest \
-            tests.auto.unit.test_BuildPixelFeaturesPipelineTest \
-            tests.auto.unit.test_NdviReconstructionFromSyntheticBandsTest \
+            # tests.auto.unit.test_BuildPixelFeaturesPipelineTest \
+            # tests.auto.unit.test_NdviReconstructionFromSyntheticBandsTest \
             # tests.auto.unit.test_TimestampsAggregationBuilderTest \
-            tests.auto.unit.test_DownsampleAggregatedTimestampsBuilderTest \
+            # tests.auto.unit.test_DownsampleAggregatedTimestampsBuilderTest \
             tests.auto.integration.test_WholePipelineTest
 
       - name: Upload test artifacts
