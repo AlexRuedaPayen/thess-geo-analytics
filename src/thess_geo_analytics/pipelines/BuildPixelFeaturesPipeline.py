@@ -17,9 +17,6 @@ from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
 # -------------------------------------------------------------------
 # Robust filename → timestamp parser
-#   Supports:
-#     ndvi_anomaly_YYYY-MM_<aoi>.tif
-#     ndvi_anomaly_YYYY-QN_<aoi>.tif
 # -------------------------------------------------------------------
 _COG_LABEL_RE = re.compile(
     r"ndvi_anomaly_(\d{4})-(\d{2}|Q[1-4])_",
@@ -28,16 +25,6 @@ _COG_LABEL_RE = re.compile(
 
 
 def parse_cog_timestamp(path: Path) -> np.datetime64:
-    """
-    Extract representative timestamp from *anomaly* COG filename.
-
-    Supports:
-      - ndvi_anomaly_YYYY-MM_<aoi>.tif
-      - ndvi_anomaly_YYYY-QN_<aoi>.tif
-
-    For quarters, map to mid-month of quarter:
-      Q1 -> Feb, Q2 -> May, Q3 -> Aug, Q4 -> Nov.
-    """
     m = _COG_LABEL_RE.search(path.name)
     if not m:
         raise ValueError(f"Cannot extract anomaly period label from filename: {path.name!r}")
@@ -56,29 +43,39 @@ def parse_cog_timestamp(path: Path) -> np.datetime64:
 
 @dataclass
 class BuildPixelFeaturesParams:
-    # Where anomaly COGs live
-    ndvi_dir: Path = RepoPaths.OUTPUTS / "cogs"
+    ndvi_dir: Path | None = None
     pattern: str = "ndvi_anomaly_*.tif"
 
-    # Optional: filter by AOI suffix in filename (e.g. "_el522.tif")
     aoi_id: str | None = None
 
-    # Output 7-band GeoTIFF
-    out_path: Path = RepoPaths.OUTPUTS / "cogs" / "pixel_features_7d.tif"
+    out_path: Path | None = None
 
-    # Diagnostics CSV
-    diagnostics_csv: Path = RepoPaths.table("pixel_features_diagnostics.csv")
+    diagnostics_csv: Path | None = None
 
-    # Tiling to avoid OOM
     tile_height: int = 512
     tile_width: int = 512
 
-    # Kept for backward compatibility but ignored (we always run serial)
     tile_workers: int | None = None
 
 
 class BuildPixelFeaturesPipeline:
     def run(self, params: BuildPixelFeaturesParams) -> Path:
+
+        # --------------------------------------------------------
+        # Resolve paths lazily (important for THESS_RUN_ROOT)
+        # --------------------------------------------------------
+        ndvi_dir = params.ndvi_dir or RepoPaths.outputs("cogs")
+
+        if params.out_path is None:
+            aoi = params.aoi_id or "aoi"
+            out_path = RepoPaths.outputs("cogs") / f"pixel_features_7d_{aoi}.tif"
+        else:
+            out_path = params.out_path
+
+        diagnostics_csv = params.diagnostics_csv or RepoPaths.table(
+            "pixel_features_diagnostics.csv"
+        )
+
         diagnostics: list[dict] = []
 
         def log_step(step: str, status: str, message: str = "", **extra) -> None:
@@ -93,8 +90,8 @@ class BuildPixelFeaturesPipeline:
             diagnostics.append(row)
 
         def flush_diagnostics():
-            params.diagnostics_csv.parent.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(diagnostics).to_csv(params.diagnostics_csv, index=False)
+            diagnostics_csv.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(diagnostics).to_csv(diagnostics_csv, index=False)
 
         try:
             # --------------------------------------------------------
@@ -103,14 +100,14 @@ class BuildPixelFeaturesPipeline:
             log_step(
                 "discover_cogs",
                 "start",
-                ndvi_dir=str(params.ndvi_dir),
+                ndvi_dir=str(ndvi_dir),
                 pattern=params.pattern,
                 aoi_filter=params.aoi_id,
             )
 
-            all_paths: List[Path] = sorted(params.ndvi_dir.glob(params.pattern))
+            all_paths: List[Path] = sorted(ndvi_dir.glob(params.pattern))
             if not all_paths:
-                msg = f"No NDVI anomaly COGs found in {params.ndvi_dir} with pattern {params.pattern}"
+                msg = f"No NDVI anomaly COGs found in {ndvi_dir} with pattern {params.pattern}"
                 log_step("discover_cogs", "error", msg, n_raw_cogs=0)
                 raise FileNotFoundError(msg)
 
@@ -118,12 +115,10 @@ class BuildPixelFeaturesPipeline:
             for p in all_paths:
                 name = p.name.lower()
 
-                # Filter out climatology / median if pattern is broad
                 if "climatology" in name or "median" in name:
                     continue
 
                 if not _COG_LABEL_RE.search(p.name):
-                    # Guards against plain ndvi_YYYY-MM_*.tif
                     continue
 
                 if params.aoi_id is not None:
@@ -134,7 +129,7 @@ class BuildPixelFeaturesPipeline:
 
             if not cog_paths:
                 msg = (
-                    f"After filtering, no anomaly COGs remained in {params.ndvi_dir} "
+                    f"After filtering, no anomaly COGs remained in {ndvi_dir} "
                     f"(pattern={params.pattern}, aoi_id={params.aoi_id}). "
                     f"Make sure you generated ndvi_anomaly_*.tif for the correct AOI."
                 )
@@ -150,7 +145,7 @@ class BuildPixelFeaturesPipeline:
             )
 
             # --------------------------------------------------------
-            # 2. Parse timestamps from filenames and sort
+            # 2. Parse timestamps
             # --------------------------------------------------------
             timestamps = [parse_cog_timestamp(p) for p in cog_paths]
             timestamps = np.array(timestamps)
@@ -169,7 +164,7 @@ class BuildPixelFeaturesPipeline:
             )
 
             # --------------------------------------------------------
-            # 3. Inspect first COG for spatial metadata
+            # 3. Inspect first COG
             # --------------------------------------------------------
             first_path = cog_paths[0]
             with rasterio.open(first_path) as src0:
@@ -189,7 +184,7 @@ class BuildPixelFeaturesPipeline:
             )
 
             # --------------------------------------------------------
-            # 4. Prepare output 7-band GeoTIFF (safe tiling)
+            # 4. Prepare output raster
             # --------------------------------------------------------
             out_nodata = -9999.0
             out_profile = profile.copy()
@@ -201,37 +196,19 @@ class BuildPixelFeaturesPipeline:
                 compress="deflate",
             )
 
-            # Safe tiling: only enable tiled output if both dims >= 16
             if height >= 16 and width >= 16:
                 out_profile.update(
                     tiled=True,
                     blockxsize=16,
                     blockysize=16,
                 )
-            else:
-                # for tiny rasters just use strip-based layout
-                out_profile.pop("tiled", None)
-                out_profile.pop("blockxsize", None)
-                out_profile.pop("blockysize", None)
 
-            out_path = params.out_path
             out_path.parent.mkdir(parents=True, exist_ok=True)
-
-            log_step(
-                "prepare_output",
-                "ok",
-                "Output profile prepared.",
-                out_path=str(out_path),
-                out_nodata=out_nodata,
-                tiled=bool(out_profile.get("tiled", False)),
-                blockxsize=int(out_profile.get("blockxsize", 0) or 0),
-                blockysize=int(out_profile.get("blockysize", 0) or 0),
-            )
 
             extractor = NdviFeatureExtractor()
 
             # --------------------------------------------------------
-            # 5. Open all input COGs once
+            # 5. Open COGs
             # --------------------------------------------------------
             srcs = [rasterio.open(p) for p in cog_paths]
 
@@ -243,26 +220,12 @@ class BuildPixelFeaturesPipeline:
                 n_tiles_x = math.ceil(width / tile_w)
                 total_tiles = n_tiles_y * n_tiles_x
 
-                log_step(
-                    "tiling",
-                    "ok",
-                    "Tiling strategy computed.",
-                    tile_height=tile_h,
-                    tile_width=tile_w,
-                    n_tiles_y=n_tiles_y,
-                    n_tiles_x=n_tiles_x,
-                    total_tiles=total_tiles,
-                )
-
-                # We run **serially** by design for robustness.
-                print("[INFO] Using serial tile processing (tile_workers=1 for stability).")
+                print("[INFO] Using serial tile processing.")
                 print(f"[INFO] Starting tiled feature computation on {total_tiles} tiles…")
-
-                tiles_processed = 0
-                empty_tiles = 0
 
                 with rasterio.open(out_path, "w", **out_profile) as dst:
                     with tqdm(total=total_tiles, desc="Pixel features", unit="tile") as pbar:
+
                         for ty in range(n_tiles_y):
                             row_off = ty * tile_h
                             h = min(tile_h, height - row_off)
@@ -278,23 +241,20 @@ class BuildPixelFeaturesPipeline:
 
                                 for t_idx, src in enumerate(srcs):
                                     arr = src.read(1, window=window).astype(np.float32)
-                                    if nodata_in is not None:
-                                        arr[arr == nodata_in] = np.nan
+
+                                    src_nodata = src.nodata if src.nodata is not None else nodata_in
+                                    if src_nodata is not None:
+                                        arr[arr == src_nodata] = np.nan
+
                                     stack[t_idx] = arr
 
-                                tiles_processed += 1
-                                valid_in_tile = np.isfinite(stack).sum()
-
-                                if valid_in_tile == 0:
-                                    empty_tiles += 1
+                                if np.isfinite(stack).sum() == 0:
                                     feats_tile = np.full((h, w, 7), np.nan, dtype=np.float32)
                                 else:
                                     feats_tile = extractor.compute_features(stack, timestamps)
 
-                                # NaNs → nodata for disk
                                 feats_tile = np.where(np.isnan(feats_tile), out_nodata, feats_tile)
 
-                                # Write 7 bands
                                 for band_idx in range(7):
                                     dst.write(
                                         feats_tile[:, :, band_idx].astype(np.float32),
@@ -303,15 +263,6 @@ class BuildPixelFeaturesPipeline:
                                     )
 
                                 pbar.update(1)
-
-                log_step(
-                    "tiles",
-                    "ok",
-                    "All tiles processed.",
-                    tiles_processed=tiles_processed,
-                    total_tiles=total_tiles,
-                    empty_tiles=empty_tiles,
-                )
 
             finally:
                 for src in srcs:
@@ -326,12 +277,10 @@ class BuildPixelFeaturesPipeline:
 
             print(f"[OK] Pixel anomaly features written → {out_path}")
 
-            # Normal completion → flush diagnostics
             flush_diagnostics()
             return out_path
 
         except Exception as e:
-            # Log error and flush diagnostics, then re-raise
             log_step("pipeline", "error", f"{type(e).__name__}: {e}")
             flush_diagnostics()
             raise

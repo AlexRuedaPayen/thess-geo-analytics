@@ -44,6 +44,11 @@ from thess_geo_analytics.pipelines.BuildNdviAnomalyMapsPipeline import (
     BuildNdviAnomalyMapsPipeline,
 )
 
+from thess_geo_analytics.pipelines.BuildPixelFeaturesPipeline import (
+    BuildPixelFeaturesPipeline,
+    BuildPixelFeaturesParams,
+)
+
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
 from tests.mocks.MockNutsService import MockNutsService
@@ -66,9 +71,7 @@ class WholePipelineTest(unittest.TestCase):
             shutil.rmtree(self.session_root)
 
         self.session_root.mkdir(parents=True)
-
         os.environ["THESS_RUN_ROOT"] = str(self.session_root)
-
         self.cfg = load_pipeline_config()
 
         print("\n[TEST RUN ROOT]", RepoPaths.run_root())
@@ -305,10 +308,39 @@ class WholePipelineTest(unittest.TestCase):
 
         # sanity: should live in outputs/cogs under the test run root
         cogs = RepoPaths.outputs("cogs")
+
         self._assert_exists(cogs, "cogs dir missing after anomaly step")
         self.assertGreater(len(list(cogs.glob(f"ndvi_anomaly_*_{self.cfg.aoi_id}.tif"))), 0)
 
-        
+
+    # -------------------------------------------------
+    # Step 10 — Pixel Features
+    # -------------------------------------------------
+    def _step_10_pixel_features(self):
+
+        aoi_id = self.cfg.aoi_id
+
+        params = BuildPixelFeaturesParams(
+            ndvi_dir=RepoPaths.outputs("cogs"),
+            pattern="ndvi_anomaly_*.tif",
+            aoi_id=aoi_id,
+            out_path=RepoPaths.outputs("cogs") / f"pixel_features_7d_{aoi_id}.tif",
+            # keep default tiling unless you want smaller tiles for tests
+            tile_height=256,
+            tile_width=256,
+        )
+
+        pipe = BuildPixelFeaturesPipeline()
+        out = pipe.run(params)
+
+        self._assert_exists(out, "pixel features GeoTIFF")
+        self._assert_raster_ok(out, "pixel features raster")
+
+        # Optional: ensure it's 7 bands
+        with rasterio.open(out) as ds:
+            self.assertEqual(ds.count, 7, "pixel features should have 7 bands")
+
+
     # -------------------------------------------------
     # Orchestrator
     # -------------------------------------------------
@@ -324,3 +356,4 @@ class WholePipelineTest(unittest.TestCase):
         self._step_07_statistics()
         self._step_08_climatology()
         self._step_09_anomaly_maps()
+        self._step_10_pixel_features()
