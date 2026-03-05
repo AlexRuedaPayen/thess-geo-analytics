@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
+import rasterio
 
 from thess_geo_analytics.core.pipeline_config import load_pipeline_config
 from thess_geo_analytics.pipelines.ExtractAoiPipeline import ExtractAoiPipeline
@@ -17,6 +18,15 @@ from thess_geo_analytics.pipelines.BuildAssetsManifestPipeline import (
     BuildAssetsManifestPipeline,
     BuildAssetsManifestParams,
 )
+from thess_geo_analytics.builders.TimestampsAggregationBuilder import (
+    TimestampsAggregationBuilder,
+    TimestampsAggregationParams,
+)
+from thess_geo_analytics.pipelines.BuildDownsampledAggregatedTimestampsPipeline import (
+    BuildDownsampledAggregatedTimestampsPipeline,
+    BuildDownsampledAggregatedTimestampsParams,
+)
+from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
 from tests.mocks.MockNutsService import MockNutsService
 from tests.mocks.MockCdseSceneCatalogService import MockCdseSceneCatalogService
@@ -41,7 +51,7 @@ class WholePipelineTest(unittest.TestCase):
         os.environ.pop("THESS_RUN_ROOT", None)
 
     # ------------------------------
-    # Step 1
+    # Step 1 — Extract AOI
     # ------------------------------
     def _step_01_extract_aoi(self) -> Path:
         pipeline = ExtractAoiPipeline(nuts_service=MockNutsService())
@@ -52,7 +62,7 @@ class WholePipelineTest(unittest.TestCase):
         return aoi_path
 
     # ------------------------------
-    # Step 2
+    # Step 2 — Scene catalog
     # ------------------------------
     def _step_02_scene_catalog(self, aoi_path: Path) -> None:
         svc = MockCdseSceneCatalogService(
@@ -97,7 +107,7 @@ class WholePipelineTest(unittest.TestCase):
         self.assertGreater(len(ts_df), 0, "time_serie.csv should not be empty")
 
     # -------------------------------------------------
-    # Step 3 — Assets manifest
+    # Step 3 — Assets manifest + download
     # -------------------------------------------------
     def _step_03_assets_manifest(self) -> None:
         pipe = BuildAssetsManifestPipeline(
@@ -145,6 +155,71 @@ class WholePipelineTest(unittest.TestCase):
             "No successful downloads",
         )
 
+        # spot-check that raw tiles exist on disk for at least one scene
+        scene_id = str(manifest_df.iloc[0]["scene_id"])
+        raw_dir = RepoPaths.run_root() / "raw" / "s2" / scene_id
+        for band in ["B04", "B08", "SCL"]:
+            self.assertTrue((raw_dir / f"{band}.tif").exists(), f"Missing raw {band}.tif for {scene_id}")
+
+    # -------------------------------------------------
+    # Step 4 — Aggregate timestamps (mosaics)
+    # -------------------------------------------------
+    def _step_04_aggregate_timestamps(self) -> list[Path]:
+        params = TimestampsAggregationParams(
+            max_workers=2,            # keep small for tests
+            bands=("B04", "B08", "SCL"),
+            debug=True,               # sequential + real tracebacks if it fails
+        )
+
+        builder = TimestampsAggregationBuilder(params)
+        out_folders = builder.run()
+
+        self.assertGreater(len(out_folders), 0, "No aggregated timestamp folders produced")
+
+        # each output folder should have 3 mosaics
+        for folder in out_folders[:3]:  # limit checks to first few for speed
+            for band in ["B04", "B08", "SCL"]:
+                tif = folder / f"{band}.tif"
+                self.assertTrue(tif.exists(), f"Missing aggregated {band}.tif in {folder}")
+                with rasterio.open(tif) as ds:
+                    self.assertGreater(ds.width, 0)
+                    self.assertGreater(ds.height, 0)
+
+        tables_dir = self.session_root / "outputs" / "tables"
+        self.assertTrue((tables_dir / "timestamps_aggregation_status.csv").exists())
+        self.assertTrue((tables_dir / "timestamps_aggregation_summary.csv").exists())
+        self.assertTrue((tables_dir / "timestamps_aggregation_band_report.csv").exists())
+
+        return out_folders
+
+    # -------------------------------------------------
+    # Step 5 — Downsample mosaics
+    # -------------------------------------------------
+    def _step_05_downsample(self) -> list[Path]:
+        src_root = RepoPaths.DATA_RAW / "aggregated"
+        dst_root = RepoPaths.DATA_RAW / "aggregated_100m"
+
+        pipe = BuildDownsampledAggregatedTimestampsPipeline()
+        outputs = pipe.run(
+            BuildDownsampledAggregatedTimestampsParams(
+                src_root=src_root,
+                dst_root=dst_root,
+                factor=1,  # keep factor=1 in tests to reduce work (still exercises the pipeline)
+            )
+        )
+
+        self.assertGreater(len(outputs), 0, "No downsampled rasters produced")
+        self.assertTrue(dst_root.exists(), "Downsample destination folder missing")
+
+        # check at least one output exists and is readable
+        out0 = outputs[0]
+        self.assertTrue(out0.exists())
+        with rasterio.open(out0) as ds:
+            self.assertGreater(ds.width, 0)
+            self.assertGreater(ds.height, 0)
+
+        return outputs
+
     # -------------------------------------------------
     # Orchestrator
     # -------------------------------------------------
@@ -152,3 +227,5 @@ class WholePipelineTest(unittest.TestCase):
         aoi_path = self._step_01_extract_aoi()
         self._step_02_scene_catalog(aoi_path)
         self._step_03_assets_manifest()
+        self._step_04_aggregate_timestamps()
+        #self._step_05_downsample()
