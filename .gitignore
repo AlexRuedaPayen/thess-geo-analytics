@@ -43,6 +43,7 @@ Thumbs.db
 outputs/
 data_raw/
 DATA_LAKE/
+reports/raster_quicklooks/
 
 # Old code archives
 old/
