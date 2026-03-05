@@ -84,3 +84,8 @@ aoi/*.prj
 !tests/fixtures/
 !tests/fixtures/data/
 !tests/fixtures/offline_cdse/
+
+###############################
+# Manual health reports
+###############################
+**/reports/

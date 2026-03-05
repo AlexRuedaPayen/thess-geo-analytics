@@ -1,0 +1,67 @@
+{
+  "name": "health_cdse_scene_catalog",
+  "when_utc": "2026-03-05T15:28:37Z",
+  "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+  "cwd": "C:\\Users\\alexr\\OneDrive\\Desktop\\thess-geo-analytics",
+  "env": {
+    "THESS_RUN_ROOT": null
+  },
+  "extra": {
+    "items": 0
+  },
+  "results": [
+    {
+      "name": "Create CdseSceneCatalogService",
+      "ok": true,
+      "started_at": 1772724494.096636,
+      "ended_at": 1772724494.096636,
+      "seconds": 0.0,
+      "message": "ok",
+      "error_type": "",
+      "error": "",
+      "traceback": "",
+      "extra": {}
+    },
+    {
+      "name": "load_aoi_geometry()",
+      "ok": true,
+      "started_at": 1772724494.096636,
+      "ended_at": 1772724494.098645,
+      "seconds": 0.0020089149475097656,
+      "message": "ok",
+      "error_type": "",
+      "error": "",
+      "traceback": "",
+      "extra": {}
+    },
+    {
+      "name": "search_items()",
+      "ok": false,
+      "started_at": 1772724494.098645,
+      "ended_at": 1772724517.2868378,
+      "seconds": 23.18819284439087,
+      "message": "failed",
+      "error_type": "APIError",
+      "error": "{\"code\":\"ConnectionDoesNotExistError\",\"description\":\"connection was closed in the middle of operation\"}",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\Users\\alexr\\OneDrive\\Desktop\\thess-geo-analytics\\tests\\manual\\services\\_common.py\", line 52, in run_step\n    out = fn()\n          ^^^^\n  File \"C:\\Users\\alexr\\OneDrive\\Desktop\\thess-geo-analytics\\tests\\manual\\services\\health_cdse_scene_catalog.py\", line 31, in _search_items\n    return svc.search_items(\n           ^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\alexr\\OneDrive\\Desktop\\thess-geo-analytics\\src\\thess_geo_analytics\\services\\CdseSceneCatalogService.py\", line 121, in search_items\n    items = list(search.items())\n            ^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\alexr\\OneDrive\\Desktop\\thess-geo-analytics\\.venv\\Lib\\site-packages\\pystac_client\\item_search.py\", line 785, in items\n    for item in self.items_as_dicts():\n  File \"C:\\Users\\alexr\\OneDrive\\Desktop\\thess-geo-analytics\\.venv\\Lib\\site-packages\\pystac_client\\item_search.py\", line 796, in items_as_dicts\n    for page in self.pages_as_dicts():\n  File \"C:\\Users\\alexr\\OneDrive\\Desktop\\thess-geo-analytics\\.venv\\Lib\\site-packages\\pystac_client\\item_search.py\", line 826, in pages_as_dicts\n    for page in self._stac_io.get_pages(\n  File \"C:\\Users\\alexr\\OneDrive\\Desktop\\thess-geo-analytics\\.venv\\Lib\\site-packages\\pystac_client\\stac_api_io.py\", line 304, in get_pages\n    page = self.read_json(url, method=method, parameters=parameters)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\alexr\\OneDrive\\Desktop\\thess-geo-analytics\\.venv\\Lib\\site-packages\\pystac\\stac_io.py\", line 200, in read_json\n    txt = self.read_text(source, *args, **kwargs)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\alexr\\OneDrive\\Desktop\\thess-geo-analytics\\.venv\\Lib\\site-packages\\pystac_client\\stac_api_io.py\", line 167, in read_text\n    return self.request(href, *args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\alexr\\OneDrive\\Desktop\\thess-geo-analytics\\.venv\\Lib\\site-packages\\pystac_client\\stac_api_io.py\", line 219, in request\n    raise APIError.from_response(resp)\npystac_client.exceptions.APIError: {\"code\":\"ConnectionDoesNotExistError\",\"description\":\"connection was closed in the middle of operation\"}\n",
+      "extra": {}
+    },
+    {
+      "name": "items_to_dataframe()",
+      "ok": true,
+      "started_at": 1772724517.2947443,
+      "ended_at": 1772724517.2947443,
+      "seconds": 0.0,
+      "message": "ok",
+      "error_type": "",
+      "error": "",
+      "traceback": "",
+      "extra": {}
+    }
+  ],
+  "summary": {
+    "ok": 3,
+    "failed": 1,
+    "total": 4
+  }
+}
