@@ -73,6 +73,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     aggregated_root = Path(DATA_LAKE) / "data_raw" / "aggregated"
 
+
     # Verbose: CLI flag wins, otherwise config
     if args.verbose:
         verbose = True
