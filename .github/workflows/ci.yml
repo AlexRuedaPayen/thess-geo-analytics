@@ -41,14 +41,12 @@ jobs:
       - name: Run selected tests
         run: |
           # Temporarily disabled tests after RepoPaths/run_root refactor.
-          # They will be re-enabled once path handling is stabilized.
-          python -m unittest \
-            # tests.auto.unit.test_BuildSceneCatalogPipelineTest \
-            # tests.auto.unit.test_BuildPixelFeaturesPipelineTest \
-            # tests.auto.unit.test_NdviReconstructionFromSyntheticBandsTest \
-            # tests.auto.unit.test_TimestampsAggregationBuilderTest \
-            # tests.auto.unit.test_DownsampleAggregatedTimestampsBuilderTest \
+          TESTS=(
             tests.auto.integration.test_WholePipelineTest
+            # tests.auto.unit.test_BuildSceneCatalogPipelineTest
+            # tests.auto.unit.test_TimestampsAggregationBuilderTest
+          )
+          python -m unittest "${TESTS[@]}"
 
       - name: Upload test artifacts
         if: always()
