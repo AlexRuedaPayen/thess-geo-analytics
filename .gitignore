@@ -89,3 +89,4 @@ aoi/*.prj
 # Manual health reports
 ###############################
 **/reports/
+tests/manual/services/reports/
