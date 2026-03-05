@@ -290,4 +290,4 @@ class WholePipelineTest(unittest.TestCase):
         downsampled = self._step_05_downsample(aggregated)
         self._step_06_ndvi(downsampled)
         self._step_07_statistics()
-        #self._step_08_climatology()
+        self._step_08_climatology()
