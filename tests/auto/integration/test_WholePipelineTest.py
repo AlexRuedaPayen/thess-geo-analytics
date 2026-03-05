@@ -39,6 +39,11 @@ from thess_geo_analytics.pipelines.BuildNdviClimatologyPipeline import (
     BuildNdviClimatologyParams,
 )
 
+from thess_geo_analytics.pipelines.BuildNdviAnomalyMapsPipeline import (
+    BuildNdviAnomalyMapsParams,
+    BuildNdviAnomalyMapsPipeline,
+)
+
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
 from tests.mocks.MockNutsService import MockNutsService
@@ -278,6 +283,33 @@ class WholePipelineTest(unittest.TestCase):
         self.assertIn("mean_ndvi_clim", df.columns)
 
     # -------------------------------------------------
+    # Step 9 — NDVI Anomaly Maps
+    # -------------------------------------------------
+
+    def _step_09_anomaly_maps(self):
+
+        params = BuildNdviAnomalyMapsParams(
+            aoi_id=self.cfg.aoi_id,
+            verbose=True,
+        )
+
+        pipe = BuildNdviAnomalyMapsPipeline()
+        results = pipe.run(params)
+
+        self.assertGreater(len(results), 0)
+
+        # at least one output should exist
+        label, tif_path, png_path = results[0]
+        self._assert_exists(tif_path, "anomaly GeoTIFF")
+        self._assert_exists(png_path, "anomaly preview PNG")
+
+        # sanity: should live in outputs/cogs under the test run root
+        cogs = RepoPaths.outputs("cogs")
+        self._assert_exists(cogs, "cogs dir missing after anomaly step")
+        self.assertGreater(len(list(cogs.glob(f"ndvi_anomaly_*_{self.cfg.aoi_id}.tif"))), 0)
+
+        
+    # -------------------------------------------------
     # Orchestrator
     # -------------------------------------------------
 
@@ -291,3 +323,4 @@ class WholePipelineTest(unittest.TestCase):
         self._step_06_ndvi(downsampled)
         self._step_07_statistics()
         self._step_08_climatology()
+        self._step_09_anomaly_maps()

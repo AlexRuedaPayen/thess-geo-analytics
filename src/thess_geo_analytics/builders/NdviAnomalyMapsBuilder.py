@@ -13,232 +13,370 @@ from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
 
 @dataclass(frozen=True)
-class NdviAnomalyMapsConfig:
-    cogs_dir: Path = RepoPaths.OUTPUTS / "cogs"
+class BuildNdviAnomalyMapsParams:
+    """
+    Parameters for building pixel-wise NDVI anomaly rasters.
+
+    Supports both monthly and quarterly NDVI composites:
+
+      - ndvi_YYYY-MM_<aoi_id>.tif
+      - ndvi_YYYY-Qn_<aoi_id>.tif
+
+    For each "period-of-year" we compute a per-pixel climatology:
+
+      - monthly:  month_of_year in [1..12]
+      - quarterly: quarter_of_year in [1..4]
+
+    and then anomalies:
+
+      anomaly(period) = ndvi(period) - climatology(period_of_year)
+    """
+
     aoi_id: str = "el522"
 
-    # Limit years used in climatology / anomaly
-    year_start: Optional[int] = None
-    year_end: Optional[int] = None
+    # IMPORTANT: keep this optional so tests using THESS_RUN_ROOT resolve correctly.
+    # If None, resolved at runtime to RepoPaths.outputs("cogs").
+    cogs_dir: Path | None = None
 
-    # nodata in NDVI COGs
+    year_start: Optional[int] = None  # inclusive, optional
+    year_end: Optional[int] = None  # inclusive, optional
+
     nodata: float = -9999.0
-
-    # Minimum number of years before we feel good about climatology
     min_years_for_climatology: int = 3
-
-    # If False and climatology tifs already exist, re-use them
     recompute_climatology: bool = False
-
     verbose: bool = False
 
 
-class NdviAnomalyMapsBuilder:
+class BuildNdviAnomalyMapsPipeline:
     """
-    Builds NDVI pixel-wise anomaly rasters:
+    Build NDVI anomaly maps from NDVI composites.
 
-        anomaly(YYYY-MM) = NDVI(YYYY-MM) - median_monthly_climatology(month_of_year)
+    Inputs (in outputs/cogs/):
+      - ndvi_YYYY-MM_<aoi_id>.tif     (monthly composites)
+      - ndvi_YYYY-Qn_<aoi_id>.tif     (quarterly composites)
 
-    Inputs:  ndvi_YYYY-MM_<aoi>.tif  (monthly composites)
-    Outputs: ndvi_climatology_median_MM_<aoi>.tif (per month-of-year)
-             ndvi_anomaly_YYYY-MM_<aoi>.tif
-             preview PNG: ndvi_anomaly_YYYY-MM_<aoi>.png
+    Outputs (also in outputs/cogs/):
+      - ndvi_climatology_median_MM_<aoi_id>.tif          (monthly climatology)
+      - ndvi_climatology_median_Qn_<aoi_id>.tif          (quarterly climatology)
+      - ndvi_anomaly_YYYY-MM_<aoi_id>.tif                (monthly anomalies)
+      - ndvi_anomaly_YYYY-Qn_<aoi_id>.tif                (quarterly anomalies)
+
+    plus PNG previews in outputs/figures/:
+      - ndvi_anomaly_<period>_<aoi_id}_preview.png
     """
 
+    # NOTE: double braces {{ }} so that .format only replaces {aoi}
     _MONTHLY_RE_TEMPLATE = r"^ndvi_(\d{{4}})-(\d{{2}})_{aoi}\.tif$"
-    _CLIM_RE_TEMPLATE    = r"^ndvi_climatology_median_(\d{{2}})_{aoi}\.tif$"
+    _QUARTERLY_RE_TEMPLATE = r"^ndvi_(\d{{4}})-(Q[1-4])_{aoi}\.tif$"
 
-    def __init__(self, cfg: NdviAnomalyMapsConfig) -> None:
-        self.cfg = cfg
+    def run(self, params: BuildNdviAnomalyMapsParams) -> list[tuple[str, Path, Path]]:
+        # Minimal but critical change: resolve cogs_dir lazily so THESS_RUN_ROOT works in tests
+        cogs_dir = params.cogs_dir or RepoPaths.outputs("cogs")
 
-        self._monthly_pattern = re.compile(
-            self._MONTHLY_RE_TEMPLATE.format(aoi=re.escape(self.cfg.aoi_id))
-        )
-        self._clim_pattern = re.compile(
-            self._CLIM_RE_TEMPLATE.format(aoi=re.escape(self.cfg.aoi_id))
-        )
+        if not cogs_dir.exists():
+            raise FileNotFoundError(f"COGs directory not found: {cogs_dir}")
 
-    # -----------------------
-    # Public API
-    # -----------------------
-    def run_all(self) -> list[tuple[str, Path, Path]]:
-        """
-        Returns: list of (label, anomaly_tif, anomaly_png)
-                 where label is YYYY-MM.
-        """
-        if not self.cfg.cogs_dir.exists():
-            raise FileNotFoundError(f"COGs directory not found: {self.cfg.cogs_dir}")
+        # 1) Discover monthly and quarterly composites
+        monthly, quarterly = self._discover_composites(cogs_dir, params)
 
-        monthly = self._find_monthly_composites()
-
-        if not monthly:
+        if not monthly and not quarterly:
             raise RuntimeError(
-                f"No monthly NDVI composites found under {self.cfg.cogs_dir} "
-                f"for AOI {self.cfg.aoi_id}."
+                f"No NDVI composites (monthly or quarterly) found under {cogs_dir} "
+                f"for AOI {params.aoi_id}."
             )
 
-        # Build or load per-month-of-year climatology rasters
-        climatology = self._build_or_load_climatology(monthly)
+        if params.verbose:
+            print(f"[INFO] Monthly composites found:   {len(monthly)}")
+            print(f"[INFO] Quarterly composites found: {len(quarterly)}")
 
-        # Build anomalies for each monthly composite
+        # 2) Build / load climatologies
+        clim_month = self._build_or_load_monthly_climatology(cogs_dir, monthly, params)
+        clim_quarter = self._build_or_load_quarterly_climatology(cogs_dir, quarterly, params)
+
+        # 3) Build anomalies for each composite
         results: list[tuple[str, Path, Path]] = []
 
-        for label, (year, month, tif_path) in sorted(monthly.items()):
-            month_of_year = month
-            clim_tif = climatology.get(month_of_year)
+        # Monthly anomalies
+        for label, (_year, month, tif_path) in sorted(monthly.items()):
+            clim_tif = clim_month.get(month)
             if clim_tif is None:
-                # No climatology for this month, skip
-                if self.cfg.verbose:
-                    print(f"[WARN] No climatology found for month={month_of_year:02d}, skipping {label}.")
+                if params.verbose:
+                    print(f"[WARN] No monthly climatology for month={month:02d}, skipping {label}.")
                 continue
 
-            anom_tif, anom_png = self._build_anomaly_for_month(
+            anom_tif, anom_png = self._build_anomaly_for_period(
+                cogs_dir=cogs_dir,
                 label=label,
                 comp_path=tif_path,
                 clim_path=clim_tif,
+                params=params,
             )
             results.append((label, anom_tif, anom_png))
 
-        if self.cfg.verbose:
+        # Quarterly anomalies
+        for label, (_year, quarter, tif_path) in sorted(quarterly.items()):
+            clim_tif = clim_quarter.get(quarter)
+            if clim_tif is None:
+                if params.verbose:
+                    print(f"[WARN] No quarterly climatology for Q{quarter}, skipping {label}.")
+                continue
+
+            anom_tif, anom_png = self._build_anomaly_for_period(
+                cogs_dir=cogs_dir,
+                label=label,
+                comp_path=tif_path,
+                clim_path=clim_tif,
+                params=params,
+            )
+            results.append((label, anom_tif, anom_png))
+
+        if params.verbose:
             print(f"[OK] total anomaly rasters produced: {len(results)}")
 
         return results
 
-    # -----------------------
+    # ------------------------------------------------------------------
     # Discovery
-    # -----------------------
-    def _find_monthly_composites(self) -> Dict[str, Tuple[int, int, Path]]:
+    # ------------------------------------------------------------------
+    def _discover_composites(
+        self,
+        cogs_dir: Path,
+        params: BuildNdviAnomalyMapsParams,
+    ) -> tuple[
+        Dict[str, Tuple[int, int, Path]],  # monthly: label -> (year, month, path)
+        Dict[str, Tuple[int, int, Path]],  # quarterly: label -> (year, quarter, path)
+    ]:
         """
         Scan cogs_dir for files of the form:
-            ndvi_YYYY-MM_<aoi>.tif
-
-        Returns:
-            { "YYYY-MM": (year, month, path), ... }
+          - ndvi_YYYY-MM_<aoi>.tif
+          - ndvi_YYYY-Qn_<aoi>.tif
         """
-        out: Dict[str, Tuple[int, int, Path]] = {}
+        monthly: Dict[str, Tuple[int, int, Path]] = {}
+        quarterly: Dict[str, Tuple[int, int, Path]] = {}
 
-        for p in self.cfg.cogs_dir.glob("ndvi_*.tif"):
-            m = self._monthly_pattern.match(p.name)
-            if not m:
+        monthly_re = re.compile(self._MONTHLY_RE_TEMPLATE.format(aoi=re.escape(params.aoi_id)))
+        quarterly_re = re.compile(self._QUARTERLY_RE_TEMPLATE.format(aoi=re.escape(params.aoi_id)))
+
+        for p in cogs_dir.glob("ndvi_*.tif"):
+            name = p.name
+
+            m_m = monthly_re.match(name)
+            if m_m:
+                year = int(m_m.group(1))
+                month = int(m_m.group(2))
+
+                if params.year_start is not None and year < params.year_start:
+                    continue
+                if params.year_end is not None and year > params.year_end:
+                    continue
+
+                label = f"{year:04d}-{month:02d}"
+                monthly[label] = (year, month, p)
                 continue
 
-            year = int(m.group(1))
-            month = int(m.group(2))
+            m_q = quarterly_re.match(name)
+            if m_q:
+                year = int(m_q.group(1))
+                q_label = m_q.group(2)  # "Q1".."Q4"
+                quarter = int(q_label[1])
 
-            # Apply year filters
-            if self.cfg.year_start is not None and year < self.cfg.year_start:
+                if params.year_start is not None and year < params.year_start:
+                    continue
+                if params.year_end is not None and year > params.year_end:
+                    continue
+
+                label = f"{year:04d}-{q_label}"
+                quarterly[label] = (year, quarter, p)
                 continue
-            if self.cfg.year_end is not None and year > self.cfg.year_end:
-                continue
 
-            label = f"{year:04d}-{month:02d}"
-            out[label] = (year, month, p)
+        return monthly, quarterly
 
-        if self.cfg.verbose:
-            print(f"[INFO] Monthly NDVI composites found: {len(out)}")
+    # ------------------------------------------------------------------
+    # Climatology helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _climatology_tif_for_month(cogs_dir: Path, month: int, params: BuildNdviAnomalyMapsParams) -> Path:
+        return cogs_dir / f"ndvi_climatology_median_{month:02d}_{params.aoi_id}.tif"
 
-        return out
+    @staticmethod
+    def _climatology_tif_for_quarter(
+        cogs_dir: Path, quarter: int, params: BuildNdviAnomalyMapsParams
+    ) -> Path:
+        return cogs_dir / f"ndvi_climatology_median_Q{quarter}_{params.aoi_id}.tif"
 
-    # -----------------------
-    # Climatology
-    # -----------------------
-    def _climatology_tif_for_month(self, month: int) -> Path:
-        """
-        Path for climatology GeoTIFF for a given month-of-year.
-        """
-        return self.cfg.cogs_dir / f"ndvi_climatology_median_{month:02d}_{self.cfg.aoi_id}.tif"
-
-    def _build_or_load_climatology(
+    def _build_or_load_monthly_climatology(
         self,
+        cogs_dir: Path,
         monthly: Dict[str, Tuple[int, int, Path]],
+        params: BuildNdviAnomalyMapsParams,
     ) -> Dict[int, Path]:
-        """
-        For each month-of-year m, compute or load:
-
-            median over all years of NDVI(YYYY-m) per pixel.
-
-        Returns:
-            { month_of_year: Path_to_climatology_tif, ... }
-        """
-        # First, check existing climatology rasters if recompute_climatology=False
         climatology: Dict[int, Path] = {}
 
-        if not self.cfg.recompute_climatology:
+        # Reuse existing files if allowed
+        if not params.recompute_climatology:
             for m in range(1, 13):
-                tif = self._climatology_tif_for_month(m)
+                tif = self._climatology_tif_for_month(cogs_dir, m, params)
                 if tif.exists():
                     climatology[m] = tif
 
-        # If we have all 12 already and recompute_climatology=False – we’re done
-        all_months_with_data = {month for _, (year, month, _) in monthly.items()}
-        if not self.cfg.recompute_climatology and all(
-            (m not in all_months_with_data) or (m in climatology) for m in range(1, 13)
-        ):
-            if self.cfg.verbose:
-                print("[INFO] Reusing existing climatology GeoTIFFs.")
-            return climatology
-
-        # Otherwise, compute climatology for months we’re missing
-        # Collect arrays per month-of-year
-        month_arrays: Dict[int, List[np.ndarray]] = {}
+        # Collect paths + years by month-of-year
+        month_paths: Dict[int, List[Path]] = {}
         month_years: Dict[int, List[int]] = {}
 
-        for label, (year, month, tif_path) in monthly.items():
-            arr, _ = self._read_ndvi_as_float(tif_path)
-            month_arrays.setdefault(month, []).append(arr)
+        for _label, (year, month, tif_path) in monthly.items():
+            month_paths.setdefault(month, []).append(tif_path)
             month_years.setdefault(month, []).append(year)
 
-        # For each month, compute median across years
-        for m, arr_list in month_arrays.items():
-            if m in climatology and not self.cfg.recompute_climatology:
-                # already have tif, skip
+        # Build climatology per month, block-wise
+        for m, paths in month_paths.items():
+            if m in climatology and not params.recompute_climatology:
                 continue
 
             years = month_years[m]
             n_years = len(set(years))
-            if n_years < self.cfg.min_years_for_climatology and self.cfg.verbose:
+            if n_years < params.min_years_for_climatology and params.verbose:
                 print(
                     f"[WARN] month={m:02d}: only {n_years} year(s) of data. "
                     "Pixel-wise climatology may be noisy."
                 )
 
-            stack = np.stack(arr_list, axis=0)  # shape: (time, H, W)
-            clim_arr = np.nanmedian(stack, axis=0).astype(np.float32)
+            template_path = paths[0]
+            out_tif = self._climatology_tif_for_month(cogs_dir, m, params)
+            out_tif.parent.mkdir(parents=True, exist_ok=True)
 
-            # Write climatology raster
-            out_tif = self._climatology_tif_for_month(m)
-            self._write_climatology_geotiff(
-                template_path=month_arrays[m] and monthly[next(
-                    label for label, (yy, mm, _) in monthly.items() if mm == m
-                )][2],
-                out_path=out_tif,
-                arr=clim_arr,
-            )
+            datasets = [rasterio.open(p) for p in paths]
+            try:
+                with rasterio.open(template_path) as tmpl:
+                    profile = tmpl.profile.copy()
 
-            climatology[m] = out_tif
+                profile.update(
+                    dtype="float32",
+                    count=1,
+                    nodata=params.nodata,
+                    tiled=True,
+                    compress="deflate",
+                )
 
-            if self.cfg.verbose:
-                print(f"[OK] climatology month={m:02d} → {out_tif}")
+                with rasterio.open(out_tif, "w", **profile) as dst:
+                    for (_ji, window) in dst.block_windows(1):
+                        block_stack: List[np.ndarray] = []
+
+                        for ds in datasets:
+                            arr = ds.read(1, window=window).astype(np.float32)
+                            nodata = ds.nodata if ds.nodata is not None else params.nodata
+                            arr = np.where(arr == nodata, np.nan, arr)
+                            block_stack.append(arr)
+
+                        stack = np.stack(block_stack, axis=0)
+                        clim_block = np.nanmedian(stack, axis=0).astype(np.float32)
+
+                        out_block = np.where(np.isnan(clim_block), params.nodata, clim_block).astype(np.float32)
+                        dst.write(out_block, 1, window=window)
+
+                    dst.build_overviews([2, 4, 8, 16], Resampling.nearest)
+                    dst.update_tags(ns="rio_overview", resampling="nearest")
+
+                climatology[m] = out_tif
+                if params.verbose:
+                    print(f"[OK] monthly climatology month={m:02d} → {out_tif}")
+            finally:
+                for ds in datasets:
+                    ds.close()
 
         return climatology
 
-    # -----------------------
-    # Anomaly for one month
-    # -----------------------
-    def _build_anomaly_for_month(
+    def _build_or_load_quarterly_climatology(
+        self,
+        cogs_dir: Path,
+        quarterly: Dict[str, Tuple[int, int, Path]],
+        params: BuildNdviAnomalyMapsParams,
+    ) -> Dict[int, Path]:
+        climatology: Dict[int, Path] = {}
+
+        if not params.recompute_climatology:
+            for q in range(1, 5):
+                tif = self._climatology_tif_for_quarter(cogs_dir, q, params)
+                if tif.exists():
+                    climatology[q] = tif
+
+        quarter_paths: Dict[int, List[Path]] = {}
+        quarter_years: Dict[int, List[int]] = {}
+
+        for _label, (year, quarter, tif_path) in quarterly.items():
+            quarter_paths.setdefault(quarter, []).append(tif_path)
+            quarter_years.setdefault(quarter, []).append(year)
+
+        for q, paths in quarter_paths.items():
+            if q in climatology and not params.recompute_climatology:
+                continue
+
+            years = quarter_years[q]
+            n_years = len(set(years))
+            if n_years < params.min_years_for_climatology and params.verbose:
+                print(
+                    f"[WARN] quarter=Q{q}: only {n_years} year(s) of data. "
+                    "Pixel-wise climatology may be noisy."
+                )
+
+            template_path = paths[0]
+            out_tif = self._climatology_tif_for_quarter(cogs_dir, q, params)
+            out_tif.parent.mkdir(parents=True, exist_ok=True)
+
+            datasets = [rasterio.open(p) for p in paths]
+            try:
+                with rasterio.open(template_path) as tmpl:
+                    profile = tmpl.profile.copy()
+
+                profile.update(
+                    dtype="float32",
+                    count=1,
+                    nodata=params.nodata,
+                    tiled=True,
+                    compress="deflate",
+                )
+
+                with rasterio.open(out_tif, "w", **profile) as dst:
+                    for (_ji, window) in dst.block_windows(1):
+                        block_stack: List[np.ndarray] = []
+
+                        for ds in datasets:
+                            arr = ds.read(1, window=window).astype(np.float32)
+                            nodata = ds.nodata if ds.nodata is not None else params.nodata
+                            arr = np.where(arr == nodata, np.nan, arr)
+                            block_stack.append(arr)
+
+                        stack = np.stack(block_stack, axis=0)
+                        clim_block = np.nanmedian(stack, axis=0).astype(np.float32)
+
+                        out_block = np.where(np.isnan(clim_block), params.nodata, clim_block).astype(np.float32)
+                        dst.write(out_block, 1, window=window)
+
+                    dst.build_overviews([2, 4, 8, 16], Resampling.nearest)
+                    dst.update_tags(ns="rio_overview", resampling="nearest")
+
+                climatology[q] = out_tif
+                if params.verbose:
+                    print(f"[OK] quarterly climatology Q{q} → {out_tif}")
+            finally:
+                for ds in datasets:
+                    ds.close()
+
+        return climatology
+
+    # ------------------------------------------------------------------
+    # Anomaly builder
+    # ------------------------------------------------------------------
+    def _build_anomaly_for_period(
         self,
         *,
-        label: str,
+        cogs_dir: Path,
+        label: str,  # "YYYY-MM" or "YYYY-Qn"
         comp_path: Path,
         clim_path: Path,
+        params: BuildNdviAnomalyMapsParams,
     ) -> tuple[Path, Path]:
-        """
-        Build anomaly for one YYYY-MM:
-
-            anomaly = ndvi_current - ndvi_climatology_month
-        """
-        ndvi_arr, profile = self._read_ndvi_with_profile(comp_path)
-        clim_arr, _ = self._read_ndvi_as_float(clim_path)
+        ndvi_arr, profile = self._read_ndvi_with_profile(comp_path, params)
+        clim_arr, _ = self._read_ndvi_as_float(clim_path, params)
 
         if ndvi_arr.shape != clim_arr.shape:
             raise ValueError(
@@ -246,53 +384,50 @@ class NdviAnomalyMapsBuilder:
                 f"{ndvi_arr.shape} vs {clim_arr.shape}"
             )
 
-        # Compute anomaly, preserving NaNs where either is NaN
         anomaly = ndvi_arr - clim_arr
-        # If either input was NaN, result is NaN automatically
 
-        # Write anomaly GeoTIFF
-        out_tif = self.cfg.cogs_dir / f"ndvi_anomaly_{label}_{self.cfg.aoi_id}.tif"
-        self._write_anomaly_geotiff(out_tif, anomaly, profile)
+        # Minimal but critical change: write under resolved cogs_dir
+        out_tif = cogs_dir / f"ndvi_anomaly_{label}_{params.aoi_id}.tif"
+        self._write_anomaly_geotiff(out_tif, anomaly, profile, params)
 
-        # Write preview PNG
-        out_png = RepoPaths.figure(f"ndvi_anomaly_{label}_{self.cfg.aoi_id}_preview.png")
+        out_png = RepoPaths.figure(f"ndvi_anomaly_{label}_{params.aoi_id}_preview.png")
         self._write_anomaly_png(out_png, anomaly)
 
-        if self.cfg.verbose:
-            print(f"[OK] anomaly {label}: {out_tif}")
-            print(f"[OK] anomaly {label} preview: {out_png}")
+        if params.verbose:
+            print(f"[OK] anomaly {label}: GeoTIFF  → {out_tif}")
+            print(f"[OK] anomaly {label}: Preview → {out_png}")
 
         return out_tif, out_png
 
-    # -----------------------
+    # ------------------------------------------------------------------
     # Raster helpers
-    # -----------------------
-    def _read_ndvi_as_float(self, path: Path) -> tuple[np.ndarray, float]:
-        """
-        Read NDVI raster as float32, converting nodata → NaN.
-        Returns (array, nodata_value).
-        """
+    # ------------------------------------------------------------------
+    def _read_ndvi_as_float(
+        self,
+        path: Path,
+        params: BuildNdviAnomalyMapsParams,
+    ) -> tuple[np.ndarray, float]:
         with rasterio.open(path) as ds:
             arr = ds.read(1).astype(np.float32)
-            nodata = ds.nodata if ds.nodata is not None else self.cfg.nodata
+            nodata = ds.nodata if ds.nodata is not None else params.nodata
 
         arr = np.where(arr == nodata, np.nan, arr)
         return arr, nodata
 
-    def _read_ndvi_with_profile(self, path: Path) -> tuple[np.ndarray, dict]:
-        """
-        Read NDVI raster as float32 + full rasterio profile,
-        converting nodata → NaN in the returned array.
-        """
+    def _read_ndvi_with_profile(
+        self,
+        path: Path,
+        params: BuildNdviAnomalyMapsParams,
+    ) -> tuple[np.ndarray, dict]:
         with rasterio.open(path) as ds:
             profile = ds.profile.copy()
             arr = ds.read(1).astype(np.float32)
-            nodata = ds.nodata if ds.nodata is not None else self.cfg.nodata
+            nodata = ds.nodata if ds.nodata is not None else params.nodata
 
         profile.update(
             dtype="float32",
             count=1,
-            nodata=self.cfg.nodata,
+            nodata=params.nodata,
             tiled=True,
             compress="deflate",
         )
@@ -300,45 +435,14 @@ class NdviAnomalyMapsBuilder:
         arr = np.where(arr == nodata, np.nan, arr)
         return arr, profile
 
-    def _write_climatology_geotiff(
-        self,
-        template_path: Path,
-        out_path: Path,
-        arr: np.ndarray,
-    ) -> None:
-        """
-        Use the template GeoTIFF (any monthly NDVI for that month) for profile
-        so we preserve CRS, transform, etc.
-        """
-        with rasterio.open(template_path) as ds:
-            profile = ds.profile.copy()
-
-        profile.update(
-            dtype="float32",
-            count=1,
-            nodata=self.cfg.nodata,
-            tiled=True,
-            compress="deflate",
-        )
-
-        out = np.where(np.isnan(arr), self.cfg.nodata, arr)
-
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with rasterio.open(out_path, "w", **profile) as dst:
-            dst.write(out.astype(np.float32), 1)
-            dst.build_overviews([2, 4, 8, 16], Resampling.nearest)
-            dst.update_tags(ns="rio_overview", resampling="nearest")
-
     def _write_anomaly_geotiff(
         self,
         out_path: Path,
         arr: np.ndarray,
         profile: dict,
+        params: BuildNdviAnomalyMapsParams,
     ) -> None:
-        """
-        Write anomaly GeoTIFF using the provided profile.
-        """
-        out = np.where(np.isnan(arr), self.cfg.nodata, arr)
+        out = np.where(np.isnan(arr), params.nodata, arr)
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with rasterio.open(out_path, "w", **profile) as dst:
@@ -347,15 +451,10 @@ class NdviAnomalyMapsBuilder:
             dst.update_tags(ns="rio_overview", resampling="nearest")
 
     def _write_anomaly_png(self, out_path: Path, arr: np.ndarray) -> None:
-        """
-        Simple preview PNG for anomaly.
-        Uses a symmetric color range around 0 so positive / negative anomalies stand out.
-        """
         import matplotlib.pyplot as plt
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # mask NaNs for plotting
         data = np.copy(arr)
         data[np.isnan(data)] = 0.0
 
