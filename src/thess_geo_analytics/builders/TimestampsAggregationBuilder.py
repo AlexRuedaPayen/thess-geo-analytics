@@ -191,7 +191,7 @@ class TimestampsAggregationBuilder:
                 # Gather all input tiles per band
                 # -----------------------------
                 for scene_id in scene_ids:
-                    scene_dir = RepoPaths.CACHE_S2 / scene_id
+                    scene_dir = RepoPaths.run_root() / "raw" / "s2" / scene_id
 
                     for band in self.params.bands:
                         tif = scene_dir / f"{band}.tif"
@@ -236,7 +236,8 @@ class TimestampsAggregationBuilder:
                 # Prepare output folder
                 # -----------------------------
                 safe_ts = _sanitize_timestamp_for_folder(ts)
-                output_folder = RepoPaths.DATA_RAW / "aggregated" / safe_ts
+                output_folder = RepoPaths.run_root() / "data_raw" / "aggregated" / safe_ts
+
                 output_folder.mkdir(parents=True, exist_ok=True)
 
                 # -----------------------------

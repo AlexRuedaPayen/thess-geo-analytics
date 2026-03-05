@@ -11,10 +11,9 @@ import numpy as np
 import rasterio
 from scipy.stats import skew
 
-# Try to import SciPy's SmallSampleWarning (internal API, so guarded).
 try:
-    from scipy.stats._stats_py import SmallSampleWarning  # type: ignore[attr-defined]
-except Exception:  # pragma: no cover
+    from scipy.stats._stats_py import SmallSampleWarning 
+except Exception:  
     SmallSampleWarning = None
 
 

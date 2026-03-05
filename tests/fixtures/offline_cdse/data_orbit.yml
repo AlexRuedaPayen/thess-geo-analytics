@@ -1,0 +1,17 @@
+model:
+  start_date: "2024-01-01"
+  end_date: null               # null => today
+  passes_per_day_mean: 1.5     # mean acquisition opportunities/day
+  passes_per_day_std: 0.5      # variability
+  timestamps_per_pass: [1,2]   # sometimes split acquisitions
+tiles:
+  tiles_per_timestamp_min: 2
+  tiles_per_timestamp_max: 11
+  cloud_cover_distribution:
+    type: "beta"
+    alpha: 2
+    beta: 8
+  full_cover_probability: 0.85  # some timestamps don't fully cover AOI
+geometry:
+  buffer_deg_used_by_pipeline: 0.05
+random_seed: 1234

@@ -21,21 +21,24 @@ class ExtractAoiPipeline:
       NutsService -> select region -> AoiBuilder -> export aoi/*.geojson
     """
 
-    def __init__(self) -> None:
-        self.nuts = NutsService()         # handles auto-download
-        self.builder = AoiBuilder()
+    def __init__(
+        self,
+        nuts_service: NutsService | None = None,
+        builder: AoiBuilder | None = None,
+    ) -> None:
+
+        # default dependencies
+        self.nuts = nuts_service or NutsService()
+        self.builder = builder or AoiBuilder()
 
     def run(self, region_name: str) -> Path:
-        # find NUTS code from name
+
         nuts_code = self.nuts.find_code_by_name_exact(region_name)
 
-        # get geometry row(s)
         gdf = self.nuts.get_by_code(nuts_code)
 
-        # build final AOI
         aoi_gdf = self.builder.build_aoi(gdf)
 
-        # export
         out_name = f"{nuts_code}_{slugify(region_name)}.geojson"
         out_path = RepoPaths.aoi(out_name)
 
@@ -43,4 +46,5 @@ class ExtractAoiPipeline:
 
         print(f"[OUTPUT] AOI extracted for {nuts_code} ({region_name})")
         print(f"[OUTPUT] Saved to: {out_path}")
+
         return out_path

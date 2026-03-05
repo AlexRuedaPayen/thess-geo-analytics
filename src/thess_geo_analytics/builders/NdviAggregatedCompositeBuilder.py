@@ -318,7 +318,7 @@ class NdviAggregatedCompositeBuilder:
                         print(f"[WARN] Worker raised unhandled exception: {e}")
 
         # ---------------- Write logs ----------------
-        RepoPaths.TABLES.mkdir(parents=True, exist_ok=True)
+        (RepoPaths.run_root() / "outputs" / "tables").mkdir(parents=True, exist_ok=True)
 
         status_df = pd.DataFrame(status_rows)
         summary_df = pd.DataFrame(summary_rows)
@@ -396,7 +396,7 @@ class NdviAggregatedCompositeBuilder:
             )
 
         # Prepare output GeoTIFF on the AOI target grid
-        out_dir = RepoPaths.OUTPUTS / "cogs"
+        out_dir = RepoPaths.run_root() / "outputs" / "cogs"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_tif = out_dir / f"ndvi_{label}_{self.aoi_id}.tif"
 
@@ -678,7 +678,7 @@ class NdviAggregatedCompositeBuilder:
         ndvi_max: float | None,
         ndvi_share_negative: float | None,
     ) -> Path:
-        meta_dir = RepoPaths.OUTPUTS / "metadata"
+        meta_dir = RepoPaths.run_root() / "outputs" / "metadata"
         meta_dir.mkdir(parents=True, exist_ok=True)
 
         out_meta = meta_dir / f"ndvi_{label}_{self.aoi_id}.json"

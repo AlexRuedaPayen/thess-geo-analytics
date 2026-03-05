@@ -4,12 +4,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import re
+import warnings
 
 import numpy as np
 import rasterio
+import matplotlib.pyplot as plt
+
 from rasterio.enums import Resampling
 
 from thess_geo_analytics.utils.RepoPaths import RepoPaths
+
 
 
 @dataclass(frozen=True)
@@ -34,8 +38,9 @@ class BuildNdviAnomalyMapsParams:
 
     aoi_id: str = "el522"
 
-    # Directory with NDVI composites (both monthly and quarterly)
-    cogs_dir: Path = RepoPaths.OUTPUTS / "cogs"
+    # Directory with NDVI composites (both monthly and quarterly).
+    # If None, resolved via RepoPaths.outputs("cogs") (respects THESS_RUN_ROOT).
+    cogs_dir: Path | None = None
 
     # Limit years used in climatology / anomaly
     year_start: Optional[int] = None  # inclusive, optional
@@ -76,15 +81,18 @@ class BuildNdviAnomalyMapsPipeline:
     _QUARTERLY_RE_TEMPLATE = r"^ndvi_(\d{{4}})-(Q[1-4])_{aoi}\.tif$"
 
     def run(self, params: BuildNdviAnomalyMapsParams) -> list[tuple[str, Path, Path]]:
-        if not params.cogs_dir.exists():
-            raise FileNotFoundError(f"COGs directory not found: {params.cogs_dir}")
+        # Resolve cogs_dir lazily so tests using THESS_RUN_ROOT work correctly.
+        cogs_dir = params.cogs_dir or RepoPaths.outputs("cogs")
+
+        if not cogs_dir.exists():
+            raise FileNotFoundError(f"COGs directory not found: {cogs_dir}")
 
         # 1) Discover monthly and quarterly composites
-        monthly, quarterly = self._discover_composites(params)
+        monthly, quarterly = self._discover_composites(params, cogs_dir=cogs_dir)
 
         if not monthly and not quarterly:
             raise RuntimeError(
-                f"No NDVI composites (monthly or quarterly) found under {params.cogs_dir} "
+                f"No NDVI composites (monthly or quarterly) found under {cogs_dir} "
                 f"for AOI {params.aoi_id}."
             )
 
@@ -93,8 +101,8 @@ class BuildNdviAnomalyMapsPipeline:
             print(f"[INFO] Quarterly composites found: {len(quarterly)}")
 
         # 2) Build / load climatologies
-        clim_month = self._build_or_load_monthly_climatology(monthly, params)
-        clim_quarter = self._build_or_load_quarterly_climatology(quarterly, params)
+        clim_month = self._build_or_load_monthly_climatology(monthly, params, cogs_dir=cogs_dir)
+        clim_quarter = self._build_or_load_quarterly_climatology(quarterly, params, cogs_dir=cogs_dir)
 
         # 3) Build anomalies for each composite
         results: list[tuple[str, Path, Path]] = []
@@ -112,6 +120,7 @@ class BuildNdviAnomalyMapsPipeline:
                 comp_path=tif_path,
                 clim_path=clim_tif,
                 params=params,
+                cogs_dir=cogs_dir,
             )
             results.append((label, anom_tif, anom_png))
 
@@ -128,6 +137,7 @@ class BuildNdviAnomalyMapsPipeline:
                 comp_path=tif_path,
                 clim_path=clim_tif,
                 params=params,
+                cogs_dir=cogs_dir,
             )
             results.append((label, anom_tif, anom_png))
 
@@ -142,6 +152,8 @@ class BuildNdviAnomalyMapsPipeline:
     def _discover_composites(
         self,
         params: BuildNdviAnomalyMapsParams,
+        *,
+        cogs_dir: Path,
     ) -> tuple[
         Dict[str, Tuple[int, int, Path]],   # monthly: label -> (year, month, path)
         Dict[str, Tuple[int, int, Path]],   # quarterly: label -> (year, quarter, path)
@@ -158,14 +170,10 @@ class BuildNdviAnomalyMapsPipeline:
         monthly: Dict[str, Tuple[int, int, Path]] = {}
         quarterly: Dict[str, Tuple[int, int, Path]] = {}
 
-        monthly_re = re.compile(
-            self._MONTHLY_RE_TEMPLATE.format(aoi=re.escape(params.aoi_id))
-        )
-        quarterly_re = re.compile(
-            self._QUARTERLY_RE_TEMPLATE.format(aoi=re.escape(params.aoi_id))
-        )
+        monthly_re = re.compile(self._MONTHLY_RE_TEMPLATE.format(aoi=re.escape(params.aoi_id)))
+        quarterly_re = re.compile(self._QUARTERLY_RE_TEMPLATE.format(aoi=re.escape(params.aoi_id)))
 
-        for p in params.cogs_dir.glob("ndvi_*.tif"):
+        for p in cogs_dir.glob("ndvi_*.tif"):
             name = p.name
 
             m_m = monthly_re.match(name)
@@ -203,17 +211,19 @@ class BuildNdviAnomalyMapsPipeline:
     # Climatology helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _climatology_tif_for_month(month: int, params: BuildNdviAnomalyMapsParams) -> Path:
-        return params.cogs_dir / f"ndvi_climatology_median_{month:02d}_{params.aoi_id}.tif"
+    def _climatology_tif_for_month(*, cogs_dir: Path, month: int, params: BuildNdviAnomalyMapsParams) -> Path:
+        return cogs_dir / f"ndvi_climatology_median_{month:02d}_{params.aoi_id}.tif"
 
     @staticmethod
-    def _climatology_tif_for_quarter(quarter: int, params: BuildNdviAnomalyMapsParams) -> Path:
-        return params.cogs_dir / f"ndvi_climatology_median_Q{quarter}_{params.aoi_id}.tif"
+    def _climatology_tif_for_quarter(*, cogs_dir: Path, quarter: int, params: BuildNdviAnomalyMapsParams) -> Path:
+        return cogs_dir / f"ndvi_climatology_median_Q{quarter}_{params.aoi_id}.tif"
 
     def _build_or_load_monthly_climatology(
         self,
         monthly: Dict[str, Tuple[int, int, Path]],
         params: BuildNdviAnomalyMapsParams,
+        *,
+        cogs_dir: Path,
     ) -> Dict[int, Path]:
         """
         For each month-of-year m, compute or load:
@@ -227,7 +237,7 @@ class BuildNdviAnomalyMapsPipeline:
         # Reuse existing files if allowed
         if not params.recompute_climatology:
             for m in range(1, 13):
-                tif = self._climatology_tif_for_month(m, params)
+                tif = self._climatology_tif_for_month(cogs_dir=cogs_dir, month=m, params=params)
                 if tif.exists():
                     climatology[m] = tif
 
@@ -235,14 +245,13 @@ class BuildNdviAnomalyMapsPipeline:
         month_paths: Dict[int, List[Path]] = {}
         month_years: Dict[int, List[int]] = {}
 
-        for label, (year, month, tif_path) in monthly.items():
+        for _, (year, month, tif_path) in monthly.items():
             month_paths.setdefault(month, []).append(tif_path)
             month_years.setdefault(month, []).append(year)
 
         # Build climatology per month, block-wise
         for m, paths in month_paths.items():
             if m in climatology and not params.recompute_climatology:
-                # already have GeoTIFF on disk
                 continue
 
             years = month_years[m]
@@ -254,13 +263,11 @@ class BuildNdviAnomalyMapsPipeline:
                 )
 
             template_path = paths[0]
-            out_tif = self._climatology_tif_for_month(m, params)
+            out_tif = self._climatology_tif_for_month(cogs_dir=cogs_dir, month=m, params=params)
             out_tif.parent.mkdir(parents=True, exist_ok=True)
 
-            # Open datasets for all paths for this month
             datasets = [rasterio.open(p) for p in paths]
             try:
-                # Assume all have identical grid; use first as template
                 with rasterio.open(template_path) as tmpl:
                     profile = tmpl.profile.copy()
 
@@ -273,8 +280,7 @@ class BuildNdviAnomalyMapsPipeline:
                 )
 
                 with rasterio.open(out_tif, "w", **profile) as dst:
-                    for (ji, window) in dst.block_windows(1):
-                        h, w = window.height, window.width
+                    for (_, window) in dst.block_windows(1):
                         block_stack: List[np.ndarray] = []
 
                         for ds in datasets:
@@ -283,15 +289,18 @@ class BuildNdviAnomalyMapsPipeline:
                             arr = np.where(arr == nodata, np.nan, arr)
                             block_stack.append(arr)
 
-                        stack = np.stack(block_stack, axis=0)  # (time, h, w)
-                        clim_block = np.nanmedian(stack, axis=0).astype(np.float32)
+                        stack = np.stack(block_stack, axis=0)
 
-                        out_block = np.where(
-                            np.isnan(clim_block),
-                            params.nodata,
-                            clim_block,
-                        ).astype(np.float32)
+                        # Avoid noisy "All-NaN slice" warnings; NaNs handled below.
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings(
+                                "ignore",
+                                message="All-NaN slice encountered",
+                                category=RuntimeWarning,
+                            )
+                            clim_block = np.nanmedian(stack, axis=0).astype(np.float32)
 
+                        out_block = np.where(np.isnan(clim_block), params.nodata, clim_block).astype(np.float32)
                         dst.write(out_block, 1, window=window)
 
                     dst.build_overviews([2, 4, 8, 16], Resampling.nearest)
@@ -311,6 +320,8 @@ class BuildNdviAnomalyMapsPipeline:
         self,
         quarterly: Dict[str, Tuple[int, int, Path]],
         params: BuildNdviAnomalyMapsParams,
+        *,
+        cogs_dir: Path,
     ) -> Dict[int, Path]:
         """
         For each quarter-of-year q, compute or load:
@@ -323,14 +334,14 @@ class BuildNdviAnomalyMapsPipeline:
 
         if not params.recompute_climatology:
             for q in range(1, 5):
-                tif = self._climatology_tif_for_quarter(q, params)
+                tif = self._climatology_tif_for_quarter(cogs_dir=cogs_dir, quarter=q, params=params)
                 if tif.exists():
                     climatology[q] = tif
 
         quarter_paths: Dict[int, List[Path]] = {}
         quarter_years: Dict[int, List[int]] = {}
 
-        for label, (year, quarter, tif_path) in quarterly.items():
+        for _, (year, quarter, tif_path) in quarterly.items():
             quarter_paths.setdefault(quarter, []).append(tif_path)
             quarter_years.setdefault(quarter, []).append(year)
 
@@ -347,7 +358,7 @@ class BuildNdviAnomalyMapsPipeline:
                 )
 
             template_path = paths[0]
-            out_tif = self._climatology_tif_for_quarter(q, params)
+            out_tif = self._climatology_tif_for_quarter(cogs_dir=cogs_dir, quarter=q, params=params)
             out_tif.parent.mkdir(parents=True, exist_ok=True)
 
             datasets = [rasterio.open(p) for p in paths]
@@ -364,8 +375,7 @@ class BuildNdviAnomalyMapsPipeline:
                 )
 
                 with rasterio.open(out_tif, "w", **profile) as dst:
-                    for (ji, window) in dst.block_windows(1):
-                        h, w = window.height, window.width
+                    for (_, window) in dst.block_windows(1):
                         block_stack: List[np.ndarray] = []
 
                         for ds in datasets:
@@ -375,14 +385,16 @@ class BuildNdviAnomalyMapsPipeline:
                             block_stack.append(arr)
 
                         stack = np.stack(block_stack, axis=0)
-                        clim_block = np.nanmedian(stack, axis=0).astype(np.float32)
 
-                        out_block = np.where(
-                            np.isnan(clim_block),
-                            params.nodata,
-                            clim_block,
-                        ).astype(np.float32)
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings(
+                                "ignore",
+                                message="All-NaN slice encountered",
+                                category=RuntimeWarning,
+                            )
+                            clim_block = np.nanmedian(stack, axis=0).astype(np.float32)
 
+                        out_block = np.where(np.isnan(clim_block), params.nodata, clim_block).astype(np.float32)
                         dst.write(out_block, 1, window=window)
 
                     dst.build_overviews([2, 4, 8, 16], Resampling.nearest)
@@ -408,6 +420,7 @@ class BuildNdviAnomalyMapsPipeline:
         comp_path: Path,
         clim_path: Path,
         params: BuildNdviAnomalyMapsParams,
+        cogs_dir: Path,
     ) -> tuple[Path, Path]:
         """
         Build anomaly for one period:
@@ -425,7 +438,7 @@ class BuildNdviAnomalyMapsPipeline:
 
         anomaly = ndvi_arr - clim_arr
 
-        out_tif = params.cogs_dir / f"ndvi_anomaly_{label}_{params.aoi_id}.tif"
+        out_tif = cogs_dir / f"ndvi_anomaly_{label}_{params.aoi_id}.tif"
         self._write_anomaly_geotiff(out_tif, anomaly, profile, params)
 
         out_png = RepoPaths.figure(f"ndvi_anomaly_{label}_{params.aoi_id}_preview.png")
@@ -535,8 +548,6 @@ class BuildNdviAnomalyMapsPipeline:
         Simple preview PNG for anomaly.
         Uses a symmetric color range around 0 so positive / negative anomalies stand out.
         """
-        import matplotlib.pyplot as plt
-
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         data = np.copy(arr)
