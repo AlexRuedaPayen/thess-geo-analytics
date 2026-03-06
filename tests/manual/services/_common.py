@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import time
 import traceback
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 
-REPORTS_DIR = Path("tests/manual/services/_reports")
+REPORTS_ROOT = Path("tests/manual/services/_reports")
+REPORTS_SESSION_ENV = "THESS_MANUAL_REPORTS_SESSION_DIR"
 
 
 @dataclass
@@ -44,6 +46,29 @@ def print_header(title: str) -> None:
 def print_kv(**kwargs: Any) -> None:
     for k, v in kwargs.items():
         print(f"{k:>22}: {v}")
+
+
+def get_session_reports_dir() -> Path:
+    raw = os.environ.get(REPORTS_SESSION_ENV)
+    if raw:
+        return Path(raw)
+    # fallback if a single health file is run directly
+    return REPORTS_ROOT / "session_standalone"
+
+
+def init_session_reports_dir(session_name: str | None = None, *, clean: bool = True) -> Path:
+    if session_name is None:
+        session_name = f"session_{time.strftime('%Y%m%d_%H%M%S')}"
+
+    session_dir = REPORTS_ROOT / session_name
+
+    if clean and session_dir.exists():
+        shutil.rmtree(session_dir)
+
+    session_dir.mkdir(parents=True, exist_ok=True)
+    os.environ[REPORTS_SESSION_ENV] = str(session_dir)
+
+    return session_dir
 
 
 def run_step(name: str, fn: Callable[[], Any]) -> Tuple[Optional[Any], StepResult]:
@@ -83,7 +108,9 @@ def run_step(name: str, fn: Callable[[], Any]) -> Tuple[Optional[Any], StepResul
 
 
 def write_report(name: str, results: list[StepResult], extra: Dict[str, Any] | None = None) -> Path:
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    reports_dir = get_session_reports_dir()
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
     payload = {
         "name": name,
         "when_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -91,16 +118,18 @@ def write_report(name: str, results: list[StepResult], extra: Dict[str, Any] | N
         "cwd": str(Path.cwd()),
         "env": {
             "THESS_RUN_ROOT": os.environ.get("THESS_RUN_ROOT"),
+            REPORTS_SESSION_ENV: os.environ.get(REPORTS_SESSION_ENV),
         },
         "extra": extra or {},
-        "results": [asdict(r) for r in results],
+        "results": [r.__dict__ for r in results],
         "summary": {
             "ok": sum(1 for r in results if r.ok),
             "failed": sum(1 for r in results if not r.ok),
             "total": len(results),
         },
     }
-    out = REPORTS_DIR / f"{name}_{int(time.time())}.json"
+
+    out = reports_dir / f"{name}.json"
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"[REPORT] wrote {out}")
     return out

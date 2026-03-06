@@ -4,6 +4,8 @@ import argparse
 from pathlib import Path
 from typing import Sequence
 
+from thess_geo_analytics.utils.RepoPaths import RepoPaths
+
 from thess_geo_analytics.core.settings import DATA_LAKE
 from thess_geo_analytics.pipelines.BuildDownsampledAggregatedTimestampsPipeline import (
     BuildDownsampledAggregatedTimestampsPipeline,
@@ -81,13 +83,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     src_root = (
         Path(args.src_root)
         if args.src_root
-        else Path(DATA_LAKE) / "data_raw" / "aggregated"
+        else RepoPaths.run_root() / "data_raw" / "aggregated"
     )
 
     dst_root = (
         Path(args.dst_root)
         if args.dst_root
-        else Path(DATA_LAKE) / "data_raw" / "aggregated_100m"
+        else RepoPaths.run_root() / "data_raw" / "aggregated_100m"
     )
 
     params = BuildDownsampledAggregatedTimestampsParams(

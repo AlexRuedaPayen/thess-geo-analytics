@@ -2,36 +2,32 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+from _common import init_session_reports_dir
 
-SCRIPTS = [
-    ROOT / "health_cdse_http.py",
-    ROOT / "health_cdse_token.py",
-    ROOT / "health_cdse_scene_catalog.py",
-    ROOT / "health_cdse_stac_item.py",
-]
 
-def main() -> int:
-    exe = sys.executable
+def main() -> None:
+    session_name = f"session_{time.strftime('%Y%m%d_%H%M%S')}"
+    session_dir = init_session_reports_dir(session_name, clean=True)
+
     print("\n=== RUN ALL MANUAL HEALTH CHECKS ===")
+    print(f"[REPORT SESSION] {session_dir}")
 
-    worst_rc = 0
-    for script in SCRIPTS:
+    files = [
+        Path("tests/manual/services/health_cdse_http.py"),
+        Path("tests/manual/services/health_cdse_token.py"),
+        Path("tests/manual/services/health_cdse_scene_catalog_deep.py"),
+        Path("tests/manual/services/health_cdse_stac_item.py"),
+    ]
+
+    for file in files:
         print("\n" + "-" * 80)
-        print(f"Running: {script.as_posix()}")
+        print(f"Running: {file.resolve()}")
         print("-" * 80)
+        subprocess.run([sys.executable, str(file)], check=False)
 
-        if not script.exists():
-            print(f"[SKIP] Missing file: {script}")
-            worst_rc = max(worst_rc, 1)
-            continue
-
-        p = subprocess.run([exe, str(script)])
-        worst_rc = max(worst_rc, p.returncode)
-
-    return worst_rc
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

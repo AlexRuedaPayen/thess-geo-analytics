@@ -7,6 +7,7 @@ from typing import List
 import rasterio
 from rasterio.enums import Resampling
 from affine import Affine
+from tqdm import tqdm
 
 from thess_geo_analytics.geo.RasterDownsampler import RasterDownsampler, DownsampleConfig
 
@@ -69,18 +70,27 @@ class DownsampleAggregatedTimestampsBuilder:
 
         written: List[Path] = []
 
-        for ts_dir in ts_folders:
-            out_dir = dst / ts_dir.name
-            out_dir.mkdir(parents=True, exist_ok=True)
+        total_jobs = sum(
+            1
+            for ts_dir in ts_folders
+            for band in self.params.bands
+            if (ts_dir / f"{band}.tif").exists()
+        )
 
-            for band in self.params.bands:
-                in_tif = ts_dir / f"{band}.tif"
-                if not in_tif.exists():
-                    continue
+        with tqdm(total=total_jobs, desc="Downsampling rasters", unit="raster") as pbar:
+            for ts_dir in ts_folders:
+                out_dir = dst / ts_dir.name
+                out_dir.mkdir(parents=True, exist_ok=True)
 
-                out_tif = out_dir / f"{band}.tif"
-                self._downsample_one(in_tif, out_tif, band=band)
-                written.append(out_tif)
+                for band in self.params.bands:
+                    in_tif = ts_dir / f"{band}.tif"
+                    if not in_tif.exists():
+                        continue
+
+                    out_tif = out_dir / f"{band}.tif"
+                    self._downsample_one(in_tif, out_tif, band=band)
+                    written.append(out_tif)
+                    pbar.update(1)
 
         return written
 

@@ -44,6 +44,8 @@ outputs/
 data_raw/
 DATA_LAKE/
 reports/raster_quicklooks/
+cache/
+raw/
 
 # Old code archives
 old/

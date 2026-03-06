@@ -116,10 +116,27 @@ class CdseSceneCatalogService:
             datetime=f"{date_start}/{date_end}",
             query=query,
             max_items=p.max_items,
+            limit=50,
         )
 
-        items = list(search.items())
-        return items, geom
+        last_exc = None
+        for attempt in range(3):
+            try:
+                items = list(search.items())
+                return items, geom
+            except Exception as e:
+                last_exc = e
+                if VERBOSE:
+                    print(
+                        f"[WARN] STAC search attempt {attempt + 1}/3 failed: "
+                        f"{type(e).__name__}: {e}"
+                    )
+                if attempt < 2:
+                    import time
+                    time.sleep(2 * (attempt + 1))
+
+        raise last_exc
+
 
     # ------------------------------------------------------------------
     # STAC items -> DataFrame

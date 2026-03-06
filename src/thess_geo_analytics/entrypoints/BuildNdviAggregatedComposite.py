@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Sequence
 
+from thess_geo_analytics.utils.RepoPaths import RepoPaths
 from thess_geo_analytics.core.pipeline_config import load_pipeline_config
 from thess_geo_analytics.core.settings import DATA_LAKE
 from thess_geo_analytics.pipelines.BuildNdviAggregatedCompositePipeline import (
@@ -71,7 +72,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     aoi_path = RepoPaths.AOI / aoi_filename
     aoi_id = cfg.aoi_id
 
-    aggregated_root = Path(DATA_LAKE) / "data_raw" / "aggregated"
+    aggregated_root = RepoPaths.run_root() / "data_raw" / "aggregated"
 
 
     # Verbose: CLI flag wins, otherwise config
