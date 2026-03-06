@@ -44,6 +44,8 @@ outputs/
 data_raw/
 DATA_LAKE/
 reports/raster_quicklooks/
+cache/
+raw/
 
 # Old code archives
 old/
@@ -84,3 +86,9 @@ aoi/*.prj
 !tests/fixtures/
 !tests/fixtures/data/
 !tests/fixtures/offline_cdse/
+
+###############################
+# Manual health reports
+###############################
+**/_reports/
+tests/manual/services/_reports/

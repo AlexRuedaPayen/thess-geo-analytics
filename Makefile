@@ -99,7 +99,7 @@ timestamps-aggregation:
 downsample-aggregated:
 	@echo "_____________________________________________________________"
 	@echo "[RUN] DownsampleAggregatedTimestamps"
-	$(PYTHON) -m thess_geo_analytics.entrypoints.DownsampleAggregatedTimestamps
+	$(PYTHON) -m thess_geo_analytics.entrypoints.BuildDownsampledAggregatedTimestamps
 
 .PHONY: ndvi-aggregated-composites
 ndvi-aggregated-composites:
