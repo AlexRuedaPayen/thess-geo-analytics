@@ -24,7 +24,7 @@ class NdviAggregatedCompositeBuilder:
     """
     Build NDVI composites from pre-aggregated timestamp folders in:
 
-        DATA_LAKE/data_raw/aggregated/<timestamp>/
+        data_raw/aggregated_<resolution>/<timestamp>/
 
     Each folder is expected to contain at least B04 and B08 rasters, and
     optionally an SCL raster for cloud masking.
@@ -55,7 +55,7 @@ class NdviAggregatedCompositeBuilder:
     # ------------------------------------------------------------------
     def _discover(self, root: Path) -> pd.DataFrame:
         """
-        Folder names you have:
+        Folder names:
           2021-02-27 09_20_31.024000+00_00
 
         Normalize to ISO-like:
@@ -402,6 +402,7 @@ class NdviAggregatedCompositeBuilder:
 
         nodata_val = -9999.0
 
+        ##### tiled = target raster stroed into windows of 256×256 tiles
         profile = {
             "driver": "GTiff",
             "dtype": "float32",
@@ -628,7 +629,7 @@ class NdviAggregatedCompositeBuilder:
             self._target = AoiTargetGrid(
                 aoi_path=self.aoi_path,
                 target_crs="EPSG:32634",
-                resolution=10.0,
+                resolution=10.0, ### <---- here I see that resolution is 10m whatever happens, it is supposed to be 10.0x{downsampling factor}
             ).build()
         return self._target
 
