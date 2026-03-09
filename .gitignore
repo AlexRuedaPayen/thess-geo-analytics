@@ -92,3 +92,6 @@ aoi/*.prj
 ###############################
 **/_reports/
 tests/manual/services/_reports/
+
+tables/
+notebooks/
