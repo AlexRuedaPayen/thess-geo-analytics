@@ -1,299 +1,907 @@
-# Thess Geo Analytics
-A Modular and Scalable Sentinel-2 Processing Pipeline
+<h1>Thess Geo Analytics</h1>
 
-Developed by: Alex Rueda Payen (Independent Research Project)  
-(Project aiming to demonstrate EO pipeline engineering skills.)
+<p>
+Sentinel-2 raster processing pipeline for NDVI time-series analysis and pixel-level feature extraction.
+</p>
 
-## Overview
+<p>
+Developed by <b>Alexandre Rueda Payen</b>.
+</p>
 
-Thess Geo Analytics is a fully modular, configuration-driven pipeline for transforming raw Sentinel-2 Level-2A data into analysis-ready products:
+<p>
+This repository implements a modular pipeline that transforms Sentinel-2 imagery into:
+</p>
 
-- AOI extraction from NUTS boundaries  
-- Sentinel-2 scene catalog creation  
-- Assets manifest generation  
-- Raw band retrieval & organization  
-- Per-timestamp mosaics (tile aggregation)  
-- Optional NDVI monthly/quarterly composites  
+<ul>
+  <li>NDVI composites</li>
+  <li>NDVI climatology rasters</li>
+  <li>NDVI anomaly maps</li>
+  <li>pixel-level temporal features for machine learning</li>
+</ul>
 
-The project is designed to be:
+<p>
+The project focuses on <b>geospatial raster engineering</b> and <b>Earth Observation data pipelines</b>.
+</p>
 
-- **Simple to use** → one YAML config  
-- **Technically deep** → scalable architecture, parallelism, efficient caching  
-- **Transparent** → parameters printed at each step  
-- **Reproducible** → deterministic execution  
+<p>
+Detailed technical explanations, design notes, and implementation comments are documented in the <b>Wiki</b>.
+</p>
 
-The intent is to showcase a well-engineered EO processing framework, suitable for consideration by institutions such as CERTH, NOA, or other European EO groups.
+<hr>
 
----
+<h2>Key Features</h2>
 
-## 1. Repository Structure
+<ul>
+  <li>Block-wise raster processing for large datasets</li>
+  <li>Cloud-Optimized GeoTIFF style outputs</li>
+  <li>Temporal NDVI compositing and anomaly detection</li>
+  <li>Pixel-level feature engineering for downstream ML</li>
+  <li>Modular pipeline architecture</li>
+  <li>Config-driven execution</li>
+</ul>
 
-```
+<hr>
+
+<h2>Pipeline Overview</h2>
+
+<pre>
+Sentinel-2 scenes
+      ↓
+tile aggregation
+      ↓
+NDVI composites
+      ↓
+climatology rasters
+      ↓
+NDVI anomaly maps
+      ↓
+pixel time-series feature extraction
+</pre>
+
+<p>
+Outputs include:
+</p>
+
+<ul>
+  <li>analysis-ready NDVI rasters</li>
+  <li>anomaly rasters</li>
+  <li>climatology rasters</li>
+  <li>pixel-level feature stacks</li>
+</ul>
+
+<p>
+<!-- TODO -->
+Add PNG previews here:
+</p>
+
+<ul>
+  <li>NDVI composite example</li>
+  <li>NDVI anomaly example</li>
+  <li>Pixel feature raster example</li>
+</ul>
+
+<hr>
+
+<h2>Repository Architecture</h2>
+
+<pre>
 thess-geo-analytics/
-│
-├── config/
-│   ├── pipeline.thess.yaml     # Main user-facing configuration
-│
-├── src/thess_geo_analytics/
-│   ├── entrypoints/            # Makefile entrypoints
-│   │   ├── ExtractAoi.py
-│   │   ├── BuildSceneCatalog.py
-│   │   ├── BuildAssetsManifest.py
-│   │   └── BuildAggregatedTimestamps.py
-│   │
-│   ├── pipelines/              # High-level orchestrators
-│   ├── builders/               # Heavy processing units (mosaics, downloads, etc.)
-│   ├── core/
-│   │   ├── pipeline_config.py  # YAML config → structured access
-│   │   ├── mode_settings.py    # dev/deep scaling logic
-│   │   └── settings.py         # advanced defaults, central paths
-│   │
-│   └── utils/
-│       ├── RepoPaths.py
-│       └── logging_params.py
-│
-├── DATA_LAKE/                  # Auto-created output lake
-├── Makefile
-└── README.md
-```
 
----
+config/
+    pipeline.thess.yaml
+    Main pipeline configuration
 
-## 2. Installation
+src/thess_geo_analytics/
 
-### Prerequisites
+    entrypoints/
+        CLI entry scripts
 
-- Python ≥ 3.11  
-- GDAL / Rasterio dependencies  
-- `make` installed  
+    pipelines/
+        high-level workflow orchestration
 
+    builders/
+        heavy processing modules
+
+    geo/
+        raster and EO processing logic
+
+    services/
+        external IO and retrieval logic
+
+    utils/
+        paths, logging, helpers
+
+outputs/
+    generated rasters, tables, figures
+
+tests/
+    unit and integration tests
+</pre>
+
+<hr>
+
+<h3>Architecture Rationale</h3>
+
+<p>
+The codebase separates responsibilities to keep the pipeline easier to maintain, test, and extend.
+</p>
+
+<h4>geo</h4>
+
+<p>
+Contains the <b>core geospatial processing logic</b>.
+</p>
+
+<ul>
+  <li>NDVI computation</li>
+  <li>cloud masking</li>
+  <li>AOI masking</li>
+  <li>window / tile processing</li>
+  <li>climatology and anomaly raster logic</li>
+  <li>pixel feature extraction</li>
+</ul>
+
+<p>
+These modules should stay as close as possible to the raster math and geospatial transformations themselves.
+</p>
+
+<h4>builders</h4>
+
+<p>
+Builders perform the <b>heavy transformations</b> on datasets.
+</p>
+
+<ul>
+  <li>build NDVI composites</li>
+  <li>build climatology rasters</li>
+  <li>build anomaly rasters</li>
+  <li>build feature rasters</li>
+</ul>
+
+<p>
+They are usually the modules that read many rasters, loop over windows, and write outputs.
+</p>
+
+<h4>pipelines</h4>
+
+<p>
+Pipelines orchestrate multiple builders and define the <b>high-level processing flow</b>.
+</p>
+
+<p>
+They express the order of operations, but they should not contain the low-level raster algorithms themselves.
+</p>
+
+<h4>entrypoints</h4>
+
+<p>
+Entrypoints expose the code as <b>runnable commands</b>.
+</p>
+
+<p>
+They usually:
+</p>
+
+<ul>
+  <li>load the configuration</li>
+  <li>instantiate the appropriate pipeline</li>
+  <li>run it</li>
+</ul>
+
+<p>
+Entrypoints should remain thin and readable.
+</p>
+
+<h4>services</h4>
+
+<p>
+Services handle <b>external systems and IO</b>.
+</p>
+
+<ul>
+  <li>catalog access</li>
+  <li>scene retrieval</li>
+  <li>asset downloading</li>
+  <li>other external interactions</li>
+</ul>
+
+<p>
+This avoids mixing external system logic with raster computation.
+</p>
+
+<hr>
+
+<h2>Parameter Modularity</h2>
+
+<p>
+Pipeline parameters are defined using <b>dedicated parameter structures</b> (typically dataclasses).
+</p>
+
+<p>
+Examples:
+</p>
+
+<pre>
+BuildNdviAnomalyMapsParams
+BuildPixelFeaturesParams
+BuildNdviClimatologyParams
+</pre>
+
+<p>
+This design keeps parameters explicit and local to each module.
+</p>
+
+<p>
+Why this helps:
+</p>
+
+<ul>
+  <li>clear parameter ownership</li>
+  <li>better type safety</li>
+  <li>less hidden state</li>
+  <li>easier testing</li>
+  <li>easier refactoring</li>
+</ul>
+
+<p>
+User-facing configuration is stored in:
+</p>
+
+<pre>
+config/pipeline.thess.yaml
+</pre>
+
+<p>
+The idea is to change pipeline behaviour through configuration without rewriting processing code.
+</p>
+
+<p>
+<!-- TODO -->
+Add links here to Wiki pages documenting the main parameter groups.
+</p>
+
+<hr>
+
+<h2>Requirements</h2>
+
+<ul>
+  <li>Python 3.11+</li>
+  <li>Rasterio</li>
+  <li>NumPy</li>
+  <li>Pandas</li>
+  <li>GDAL-compatible environment</li>
+  <li>Make (optional but recommended)</li>
+</ul>
+
+<p>
 Optional:
-- CDSE (Copernicus Data Space) credentials  
-- Google Cloud Storage credentials  
+</p>
 
-### Setup
+<ul>
+  <li>Copernicus Data Space credentials for scene retrieval</li>
+</ul>
 
-```
-git clone https://github.com/<your-repo>/thess-geo-analytics.git
+<hr>
+
+<h2>Installation</h2>
+
+<p>
+Clone the repository:
+</p>
+
+<pre>
+git clone https://github.com/&lt;your-repo&gt;/thess-geo-analytics.git
 cd thess-geo-analytics
+</pre>
 
+<p>
+Create a virtual environment:
+</p>
+
+<pre>
 python -m venv .venv
-source .venv/bin/activate      # Linux/Mac
-.venv\Scripts\activate       # Windows
+source .venv/bin/activate
+</pre>
 
+<p>
+Windows:
+</p>
+
+<pre>
+.venv\Scripts\activate
+</pre>
+
+<p>
+Install dependencies:
+</p>
+
+<pre>
 pip install -r requirements.txt
-```
+</pre>
 
-Optional `.env`:
+<p>
+<!-- TODO -->
+If you use a pyproject.toml / editable install, add the command here.
+Example:
+</p>
 
-```
-DATA_LAKE=/path/to/data_lake
-CDSE_USERNAME=...
-CDSE_PASSWORD=...
-```
+<pre>
+pip install -e .
+</pre>
 
----
+<hr>
 
-## 3. Configuration (`pipeline.thess.yaml`)
+<h2>Configuration</h2>
 
-This is the only file users normally edit.
+<p>
+Pipeline behaviour is controlled through:
+</p>
 
-### Example:
+<pre>
+config/pipeline.thess.yaml
+</pre>
 
-```yaml
-mode: "dev"
-debug: false
+<p>
+Example:
+</p>
 
-region: "Thessaloniki"
-aoi_id: "el522"
+<pre>
+region: Thessaloniki
+aoi_id: el522
 
 pipeline:
   date_start: "2021-01-01"
 
 raster:
   resolution: 10
+</pre>
 
-scene_catalog:
-  cloud_cover_max: 20.0
-  max_items: 3000
-  full_cover_threshold: 0.95
-  n_anchors: 64
-  window_days: 42
-  collection: "sentinel-2-l2a"
+<p>
+Typical configuration controls:
+</p>
 
-assets_manifest:
-  max_scenes: null
-  upload_to_gcs: false
+<ul>
+  <li>AOI / region</li>
+  <li>time range</li>
+  <li>raster resolution</li>
+  <li>scene selection rules</li>
+  <li>NDVI composite strategy</li>
+  <li>anomaly and feature extraction settings</li>
+</ul>
 
-timestamps_aggregation:
-  merge_method: "first"
-  resampling: "nearest"
-  nodata: 0.0
-  bands: ["B04", "B08", "SCL"]
+<p>
+<!-- TODO -->
+Add a short example of your real config or link the full config section in the Wiki.
+</p>
 
+<hr>
 
-ndvi_composites:
-  min_scenes_per_month: 2
-  fallback_to_quarterly: true
-  upload_to_gcs: false
-  strategy: "monthly"
-  max_scenes_per_period: null
-  cloud_masking: true
-```
+<h2>Build Instructions</h2>
 
-### User should focus on:
+<p>
+If running locally, the usual build/setup process is:
+</p>
 
-| Section | Purpose |
-|--------|---------|
-| mode | `dev` = quick tests, `deep` = full run |
-| pipeline.date_start | temporal start for all steps |
-| scene_catalog.* | how strict / dense sampling is |
-| raster.resolution | output resolution |
-| upload_to_gcs | whether to upload intermediate results |
-| timestamps_aggregation.* | mosaic behavior |
+<pre>
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+</pre>
 
-Advanced storage rules, paths, and internal defaults live in `settings.py`.
+<p>
+If the package needs to be installed in editable mode:
+</p>
 
----
+<pre>
+pip install -e .
+</pre>
 
-## 4. Running the Pipeline
+<p>
+If you use tests before running the pipeline:
+</p>
 
-### Individual steps
+<pre>
+pytest
+</pre>
 
-```
+<p>
+<!-- TODO -->
+If there is a preferred command for validating the environment, add it here.
+</p>
+
+<hr>
+
+<h2>Running the Pipeline</h2>
+
+<p>
+The repository uses a <b>Makefile</b> to run pipeline steps.
+</p>
+
+<p>
+Available commands:
+</p>
+
+<pre>
 make extract-aoi
 make scene-catalog
 make assets-manifest
 make timestamps-aggregation
-```
+make ndvi-composites
+make anomalies
+make pixel-features
+</pre>
 
-### Full pipeline
+<p>
+Run the full pipeline:
+</p>
 
-```
+<pre>
 make full
-```
+</pre>
 
-Each step prints a structured log:
+<p>
+<!-- TODO -->
+Adjust these Make targets so they match the real Makefile exactly.
+</p>
 
-```
-[ENTRYPOINT] BuildSceneCatalog
-[PARAMETERS]
-  mode = dev
-  region = Thessaloniki
-  aoi_id = el522
-  date_start = 2021-01-01    (Earliest acquisition date)
-  max_items = 3000           (Max STAC items)
-  full_cover_threshold = 0.95 (Tile coverage threshold)
-------------------------------------------------------------
-```
+<hr>
 
----
+<h2>Running Individual Modules</h2>
 
-## 5. Pipeline Steps
+<p>
+Example: build NDVI composites
+</p>
 
-### 1. AOI Extraction
-- Downloads NUTS boundaries if missing  
-- Extracts AOI by region name  
-- Produces a GeoJSON AOI file  
+<pre>
+python -m thess_geo_analytics.entrypoints.BuildNdviComposites
+</pre>
 
-### 2. Scene Catalog
-- Queries Sentinel-2 collection  
-- Filters scenes by cloud cover and AOI coverage  
-- Uses anchor dates + temporal windows  
-- Produces:  
-  - `scenes_s2_all.csv`  
-  - `scenes_selected.csv`  
+<p>
+Example: build anomaly maps
+</p>
 
-### 3. Assets Manifest
-- Determines required assets for selected scenes  
-- Optionally downloads raw S2 bands  
-- Validates TIFFs  
-- Creates:  
-  - `assets_manifest_selected.csv`  
+<pre>
+python -m thess_geo_analytics.entrypoints.BuildNdviAnomalyMaps
+</pre>
 
-### 4. Timestamp Aggregation
-- Groups tiles by timestamp  
-- Performs mosaicking with user-defined merge + resampling  
-- Saves mosaics under:  
+<p>
+Example: build pixel features
+</p>
 
-```
-DATA_LAKE/data_raw/aggregated/<timestamp>/
-```
+<pre>
+python -m thess_geo_analytics.entrypoints.BuildPixelFeatures
+</pre>
 
----
-### 5. NDVI Composite
-- Group timestamps by months or quarter if too sparse
-- Performs a mean over all raster pixel that have been rescale to the corsest
-- Compute the NDVI (Non-Differential Vegetation Index):
+<p>
+Each module reads parameters from the YAML configuration or from its dedicated parameter structure.
+</p>
 
-```
-``
+<p>
+<!-- TODO -->
+Replace module names if your entrypoint filenames differ.
+</p>
 
-## 6. Recommended Parameter Guidelines
+<hr>
 
-### Development mode (fast)
+<h2>Docker Build and Execution</h2>
 
-```yaml
-mode: dev
-scene_catalog:
-  max_items: 300–800
-  n_anchors: 8–16
-  window_days: 8–20
-```
+<p>
+The project can also be executed inside Docker to avoid dependency issues, especially around GDAL / Rasterio.
+</p>
 
-### Production mode
+<p>
+Outputs should be written outside the container using a <b>volume mount</b>, so generated rasters remain accessible on the host machine.
+</p>
 
-```yaml
-mode: deep
-scene_catalog:
-  max_items: 3000+
-  n_anchors: 64
-  window_days: 42
-```
+<hr>
 
-### Cloud cover
-- 5–20% = clean scenes  
-- 20–40% = more frequent dates  
+<h3>1. Build the Docker image</h3>
 
-### Resolution
-- **10 m** = best for NDVI + cloud mask  
-- **20 m** = faster, lighter outputs  
+<pre>
+docker build -t thess-geo-analytics .
+</pre>
 
----
+<p>
+This builds the container image from the repository root.
+</p>
 
-## 7. Expected Outputs
+<p>
+<!-- TODO -->
+If your Dockerfile has a different name or location, update this command.
+</p>
 
-A typical run produces:
+<hr>
 
-### Tables
-- Scene catalog (full & filtered)  
-- Assets manifest  
-- NDVI composite statistics (to developp):
+<h3>2. Run the container</h3>
 
-$\displaystyle \text{NDVI} = \frac{\text{NIR} - \text{RED}}{\text{NIR} + \text{RED}}$
+<p>
+Example:
+</p>
 
-### Rasters
-- Aggregated mosaics per timestamp  
-- NDVI composite rasters 
+<pre>
+docker run \
+  -v $(pwd)/outputs:/app/outputs \
+  -v $(pwd)/config:/app/config \
+  thess-geo-analytics
+</pre>
 
-### Data Lake Structure
+<p>
+Explanation:
+</p>
 
-```
-DATA_LAKE/
-  data_raw/
-    s2/
-    aggregated/
-  cache/
-```
+<ul>
+  <li><code>-v $(pwd)/outputs:/app/outputs</code> mounts the output folder so rasters and tables are stored on the host</li>
+  <li><code>-v $(pwd)/config:/app/config</code> mounts the config folder so parameters can be changed without rebuilding the image</li>
+</ul>
 
----
+<p>
+Windows PowerShell example:
+</p>
 
-## 8. Purpose of This Project
+<pre>
+docker run `
+  -v ${PWD}/outputs:/app/outputs `
+  -v ${PWD}/config:/app/config `
+  thess-geo-analytics
+</pre>
 
-This project is built with the intention to demonstrate:
+<p>
+<!-- TODO -->
+Adjust <code>/app</code> if your container uses another working directory.
+</p>
 
-- Earth Observation processing engineering  
-- Scalable architecture design  
-- Clean reproducible pipelines  
-- Experience with Sentinel-2, STAC, mosaicking, caching, tiling  
-- Ability to build realistic production-like EO pipelines  
+<hr>
+
+<h3>3. Run a specific pipeline step inside Docker</h3>
+
+<p>
+Example: build NDVI anomaly maps
+</p>
+
+<pre>
+docker run \
+  -v $(pwd)/outputs:/app/outputs \
+  -v $(pwd)/config:/app/config \
+  thess-geo-analytics \
+  python -m thess_geo_analytics.entrypoints.BuildNdviAnomalyMaps
+</pre>
+
+<p>
+Example: build pixel features
+</p>
+
+<pre>
+docker run \
+  -v $(pwd)/outputs:/app/outputs \
+  -v $(pwd)/config:/app/config \
+  thess-geo-analytics \
+  python -m thess_geo_analytics.entrypoints.BuildPixelFeatures
+</pre>
+
+<p>
+This is useful when you want to run only one stage of the pipeline.
+</p>
+
+<hr>
+
+<h3>4. Interactive container session</h3>
+
+<pre>
+docker run -it \
+  -v $(pwd)/outputs:/app/outputs \
+  -v $(pwd)/config:/app/config \
+  thess-geo-analytics \
+  /bin/bash
+</pre>
+
+<p>
+This can be useful for debugging paths, inspecting installed dependencies, or testing commands manually.
+</p>
+
+<hr>
+
+<h2>Pipeline Stages</h2>
+
+<h3>1. AOI Extraction</h3>
+
+<p>
+Input:
+</p>
+
+<pre>
+NUTS boundaries / AOI definition
+</pre>
+
+<p>
+Output:
+</p>
+
+<pre>
+AOI GeoJSON
+</pre>
+
+<p>
+The AOI defines the spatial mask used for all later raster processing.
+</p>
+
+<p>
+See the Wiki for details.
+</p>
+
+<h3>2. Scene Catalog</h3>
+
+<p>
+Builds a catalog of Sentinel-2 scenes intersecting the AOI.
+</p>
+
+<p>
+Typical filters include:
+</p>
+
+<ul>
+  <li>cloud cover</li>
+  <li>AOI coverage</li>
+  <li>temporal sampling</li>
+</ul>
+
+<p>
+Outputs:
+</p>
+
+<pre>
+scenes_s2_all.csv
+scenes_selected.csv
+</pre>
+
+<h3>3. Asset Manifest</h3>
+
+<p>
+Determines which raster assets are required for selected scenes.
+</p>
+
+<p>
+Typical assets:
+</p>
+
+<ul>
+  <li>B04 (RED)</li>
+  <li>B08 (NIR)</li>
+  <li>SCL (optional cloud mask)</li>
+</ul>
+
+<p>
+Output:
+</p>
+
+<pre>
+assets_manifest_selected.csv
+</pre>
+
+<h3>4. Timestamp Aggregation</h3>
+
+<p>
+Groups tiles by timestamp and mosaics them into AOI-scale rasters.
+</p>
+
+<p>
+Output example:
+</p>
+
+<pre>
+outputs/cogs/aggregated/&lt;timestamp&gt;/
+</pre>
+
+<h3>5. NDVI Composites</h3>
+
+<p>
+Computes NDVI from RED and NIR bands.
+</p>
+
+<pre>
+NDVI = (NIR - RED) / (NIR + RED)
+</pre>
+
+<p>
+Composite strategies include:
+</p>
+
+<ul>
+  <li>monthly composites</li>
+  <li>quarterly fallback when monthly coverage is too sparse</li>
+</ul>
+
+<p>
+Outputs:
+</p>
+
+<pre>
+ndvi_YYYY-MM_&lt;aoi&gt;.tif
+ndvi_YYYY-Qn_&lt;aoi&gt;.tif
+</pre>
+
+<h3>6. Climatology</h3>
+
+<p>
+Builds per-pixel climatology rasters from historical NDVI composites.
+</p>
+
+<p>
+Example:
+</p>
+
+<pre>
+ndvi_climatology_median_05_el522.tif
+</pre>
+
+<p>
+Meaning: median NDVI for May across years.
+</p>
+
+<h3>7. NDVI Anomaly Maps</h3>
+
+<p>
+Computes anomalies relative to climatology:
+</p>
+
+<pre>
+NDVI anomaly = NDVI(period) - climatology(period_of_year)
+</pre>
+
+<p>
+Outputs:
+</p>
+
+<pre>
+ndvi_anomaly_YYYY-MM_&lt;aoi&gt;.tif
+ndvi_anomaly_YYYY-Qn_&lt;aoi&gt;.tif
+</pre>
+
+<p>
+PNG previews can also be generated.
+</p>
+
+<h3>8. Pixel Feature Extraction</h3>
+
+<p>
+Converts the NDVI anomaly time series into a multi-band feature raster.
+</p>
+
+<p>
+Output example:
+</p>
+
+<pre>
+pixel_features_7d_&lt;aoi&gt;.tif
+</pre>
+
+<p>
+Typical output shape:
+</p>
+
+<pre>
+(height, width, 7)
+</pre>
+
+<p>
+These features summarize the temporal behaviour of each pixel and can be used later for ML workflows.
+</p>
+
+<hr>
+
+<h2>Outputs</h2>
+
+<p>
+Outputs are written under:
+</p>
+
+<pre>
+outputs/
+
+    cogs/
+        NDVI rasters
+        anomaly rasters
+        climatology rasters
+        feature rasters
+
+    tables/
+        diagnostics
+        summary statistics
+
+    figures/
+        PNG previews
+</pre>
+
+<p>
+Example outputs:
+</p>
+
+<pre>
+ndvi_2023-05_el522.tif
+ndvi_anomaly_2023-05_el522.tif
+pixel_features_7d_el522.tif
+</pre>
+
+<p>
+<!-- TODO -->
+Add PNG preview images here once available.
+</p>
+
+<hr>
+
+<h2>Testing</h2>
+
+<p>
+The repository includes tests for core logic and pipeline behaviour.
+</p>
+
+<p>
+Run tests with:
+</p>
+
+<pre>
+pytest
+</pre>
+
+<p>
+<!-- TODO -->
+If you have a dedicated integration test command, add it here.
+</p>
+
+<hr>
+
+<h2>Documentation</h2>
+
+<p>
+Most technical explanations are documented in the <b>Wiki</b>.
+</p>
+
+<p>
+Suggested Wiki sections:
+</p>
+
+<ul>
+  <li>architecture overview</li>
+  <li>configuration guide</li>
+  <li>NDVI compositing</li>
+  <li>climatology and anomalies</li>
+  <li>pixel feature engineering</li>
+  <li>known limitations</li>
+</ul>
+
+<p>
+<!-- TODO -->
+Add actual Wiki links here.
+</p>
+
+<hr>
+
+<h2>Known Limitations</h2>
+
+<ul>
+  <li>some temporal features still assume simplified time spacing</li>
+  <li>some modules remain prototype-like and can still be cleaned further</li>
+  <li>feature definitions are intentionally simple at this stage</li>
+</ul>
+
+<p>
+More detailed notes are available in the Wiki.
+</p>
+
+<hr>
+
+<h2>Purpose</h2>
+
+<p>
+This repository was developed as an independent project to demonstrate:
+</p>
+
+<ul>
+  <li>Earth Observation raster engineering</li>
+  <li>Sentinel-2 processing pipelines</li>
+  <li>geospatial data engineering</li>
+  <li>reproducible EO workflows</li>
+</ul>
+
+<p>
+The goal is to produce analysis-ready EO datasets suitable for downstream machine learning tasks.
+</p>
