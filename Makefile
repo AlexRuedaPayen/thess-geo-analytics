@@ -47,6 +47,27 @@ test:
 	$(PYTHON) -m unittest discover -s tests/auto/unit -v
 
 # ------------------------
+# Visualization / QA
+# ------------------------
+
+.PHONY: visualize
+visualize:
+	@echo "_____________________________________________________________"
+	@echo "[QA] Export raster preview PNGs"
+	$(PYTHON) -m thess_geo_analytics.tools.visualize_outputs \
+		--cogs-dir outputs/cogs \
+		--save-previews \
+		--out-dir outputs/figures \
+		--no-prompt
+
+.PHONY: visualize-interactive
+visualize-interactive:
+	@echo "_____________________________________________________________"
+	@echo "[QA] Interactive raster visualization"
+	$(PYTHON) -m thess_geo_analytics.tools.visualize_outputs \
+		--cogs-dir outputs/cogs
+
+# ------------------------
 # Help
 # ------------------------
 
@@ -63,6 +84,8 @@ help:
 	@echo "  make ndvi-climatology           - build NDVI climatology baseline"
 	@echo "  make ndvi-anomaly-maps          - build NDVI anomaly rasters"
 	@echo "  make ndvi-pixel-features        - build 7D pixelwise NDVI features"
+	@echo "  make visualize                  - export PNG previews from outputs/cogs to outputs/figures"
+	@echo "  make visualize-interactive      - open rasters interactively with matplotlib"
 	@echo "  make clean                      - remove generated outputs"
 	@echo "  make clean-hard                 - deep cleanup"
 	@echo "  make full                       - full EO pipeline"
