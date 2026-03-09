@@ -19,19 +19,18 @@ Sentinel-2 imagery into <b>analysis-ready datasets</b> for temporal analysis and
 </p>
 
 <p>
-The pipeline generates:
+The pipeline produces three main types of outputs:
 </p>
 
 <ul>
-<li>NDVI composites</li>
 <li>NDVI climatology rasters</li>
-<li>NDVI anomaly maps</li>
+<li>NDVI anomaly time series</li>
 <li>pixel-level temporal feature stacks</li>
 </ul>
 
 <p>
 The long-term objective is to detect <b>clusters of pixels with similar temporal behaviour</b>.
-These patterns may correspond to:
+These clusters may correspond to:
 </p>
 
 <ul>
@@ -43,7 +42,8 @@ These patterns may correspond to:
 </ul>
 
 <p>
-Future versions will include <b>pixel clustering and anomaly detection models</b>.
+The final goal is to use these features as input to <b>machine learning models</b> capable of 
+detecting spatial patterns and changes in land dynamics.
 </p>
 
 <hr>
@@ -100,10 +100,6 @@ Typical image size:
 
 <h3>2. Run the Pipeline</h3>
 
-<p>
-Example execution command (PowerShell):
-</p>
-
 <pre>
 docker run -it --rm `
   -v "C:\...\DATA_LAKE:/data_lake" `
@@ -122,22 +118,13 @@ docker run -it --rm `
 
 <h2>Running the Pipeline</h2>
 
-<h3>Run a Decoy Pipeline (Mocked Integration Test)</h3>
-
-<p>
-To validate the orchestration logic without downloading or processing real Sentinel-2 rasters,
-you can run a <b>decoy pipeline</b> using <b>dummy rasters provided through mocks</b>:
-</p>
+<h3>Run a Decoy Pipeline (Mocked Integration Test) (~3 mins)</h3>
 
 <pre>
 python -m unittest tests.auto.integration.test_WholePipelineTest -v
 </pre>
 
-<h3>Run the Full Real Pipeline</h3>
-
-<p>
-To execute the complete real pipeline end-to-end:
-</p>
+<h3>Run the Full Pipeline (~4h) </h3>
 
 <pre>
 make full
@@ -145,13 +132,49 @@ make full
 
 <h3>Run Individual Steps</h3>
 
-<p>
-To run individual pipeline steps while respecting dependencies, use:
-</p>
-
 <pre>
 make help
 </pre>
+
+<hr>
+
+<h2>Visualizing Results</h2>
+
+<p>
+The repository includes a small visualization utility that generates preview images
+from the produced rasters.
+</p>
+
+<pre>
+make visualize
+</pre>
+
+<p>
+This reads rasters from:
+</p>
+
+<pre>
+outputs/cogs/
+</pre>
+
+<p>
+and exports PNG previews to:
+</p>
+
+<pre>
+outputs/figures/
+</pre>
+
+<p>
+This tool is useful for quickly inspecting:
+</p>
+
+<ul>
+<li>NDVI composites</li>
+<li>NDVI anomalies</li>
+<li>NDVI climatology maps</li>
+<li>pixel feature rasters</li>
+</ul>
 
 <hr>
 
@@ -173,25 +196,11 @@ Memory usage is limited using a WSL2 configuration file:
 </p>
 
 <pre>
-C:\Users\&lt;user&gt;\.wslconfig
-</pre>
-
-<p>
-Example configuration:
-</p>
-
-<pre>
 [wsl2]
-
 memory=3GB
 processors=2
 swap=8GB
-localhostForwarding=true
 </pre>
-
-<p>
-This behaves similarly to <b>Linux cgroups resource limits</b>.
-</p>
 
 <p>
 Typical Sentinel-2 scene size:
@@ -202,126 +211,167 @@ Typical Sentinel-2 scene size:
 </pre>
 
 <p>
-The pipeline opens at most <b>four scenes simultaneously</b>, keeping memory usage around:
+The pipeline never loads more than <b>four scenes simultaneously</b>,
+keeping memory usage below roughly:
 </p>
 
 <pre>
 ~600 MB
 </pre>
 
-<p>
-Processing relies on <b>window-based raster operations</b> to avoid loading entire rasters into RAM.
-</p>
-
 <hr>
 
-<h2>Resolution Downscaling</h2>
+<h2>Pipeline Parameters</h2>
 
 <p>
-For faster processing the pipeline supports raster downscaling.
-</p>
-
-<p>
-Example:
+The experiment described in this repository was run using the following configuration:
 </p>
 
 <pre>
-10 m Sentinel-2 → 100 m raster
+mode: "deep"
+debug: false
+
+region: "Thessaloniki"
+aoi_id: "el522"
+
+pipeline:
+  date_start: "2023-01-01"
+
+raster:
+  resolution: 20
+
+scene_catalog:
+  cloud_cover_max: 20.0
+  max_items: 3000
+  full_cover_threshold: 0.95
+  n_anchors: 18
+  window_days: 21
+  collection: "sentinel-2-l2a"
+
+ndvi_composites:
+  min_scenes_per_month: 2
+  fallback_to_quarterly: true
+  strategy: "monthly"
+  cloud_masking: true
 </pre>
 
 <p>
-Values are aggregated using the <b>average value within each superpixel</b>.
-</p>
-
-<p>
-This significantly reduces processing time and disk usage while remaining sufficient 
-for <b>regional-scale analysis</b>.
-</p>
-
-<hr>
-
-<h2>Pipeline Overview</h2>
-
-<pre>
-Sentinel-2 scenes
-      ↓
-tile aggregation
-      ↓
-NDVI composites
-      ↓
-NDVI climatology
-      ↓
-NDVI anomaly maps
-      ↓
-pixel time-series feature extraction
-</pre>
-
-<p>
-Outputs include:
+These parameters resulted in:
 </p>
 
 <ul>
-<li>NDVI rasters</li>
-<li>climatology rasters</li>
-<li>NDVI anomaly rasters</li>
-<li>pixel feature stacks</li>
+<li><b>14 Sentinel-2 scenes</b> downloaded</li>
+<li>Scenes filtered by <b>cloud cover and AOI completeness</b></li>
+<li>Images <b>downscaled to 20 m resolution</b></li>
+<li><b>11 quarterly NDVI rasters</b> generated</li>
 </ul>
 
-<hr>
-
-<h2>Running the Pipeline (Makefile)</h2>
-
 <p>
-Available commands:
+Although the catalog attempted to retrieve <b>18 equidistant timestamps</b>,
+several scenes were discarded due to:
 </p>
 
-<pre>
-make extract-aoi
-make scene-catalog
-make assets-manifest
-make timestamps-aggregation
-make ndvi-composites
-make anomalies
-make pixel-features
-</pre>
+<ul>
+<li>incomplete AOI coverage</li>
+<li>excessive cloud cover</li>
+</ul>
 
 <p>
-Run the full pipeline:
+The STAC query allows pagination up to thousands of scenes, but increasing
+<code>max_items</code> significantly would slow down the catalog stage.
 </p>
-
-<pre>
-make full
-</pre>
 
 <hr>
 
-<h2>Example Outputs</h2>
-
-<pre>
-ndvi_2023-05_el522.tif
-ndvi_anomaly_2023-05_el522.tif
-pixel_features_7d_el522.tif
-</pre>
+<h2>Climatology Maps</h2>
 
 <p>
-Outputs are written to:
+The climatology stage computes the <b>typical NDVI behaviour</b> for each pixel
+based on historical observations.
+</p>
+
+<p>
+For each period of the year, the pipeline computes:
+</p>
+
+<ul>
+<li>pixel-wise median NDVI</li>
+<li>monthly or quarterly NDVI statistics</li>
+</ul>
+
+<p>
+These climatology rasters represent the <b>baseline vegetation state</b>
+against which anomalies are later computed.
+</p>
+
+<p>
+Results and observations will be documented here.
+</p>
+
+<hr>
+
+<h2>NDVI Anomaly Time Series</h2>
+
+<p>
+An NDVI anomaly is defined as:
 </p>
 
 <pre>
-outputs/
-
-    cogs/
-        NDVI rasters
-        anomaly rasters
-        climatology rasters
-        feature rasters
-
-    tables/
-        diagnostics
-
-    figures/
-        PNG previews
+NDVI anomaly = NDVI_observed − NDVI_climatology
 </pre>
+
+<p>
+This produces a temporal stack of rasters describing
+how vegetation deviates from its expected behaviour.
+</p>
+
+<p>
+These anomaly rasters form the <b>core time series of interest</b>
+used to detect disturbances and recovery patterns.
+</p>
+
+<p>
+The anomaly time series extracted for Thessaloniki will be analyzed here.
+</p>
+
+<hr>
+
+<h2>Pixel Feature Encoding (7D)</h2>
+
+<p>
+The anomaly time series is then encoded into a <b>7-dimensional feature vector per pixel</b>.
+</p>
+
+<p>
+Each pixel is summarized using the following features:
+</p>
+
+<ul>
+<li>trend slope</li>
+<li>seasonal variability</li>
+<li>minimum anomaly</li>
+<li>recovery ratio</li>
+<li>anomaly persistence</li>
+<li>NDVI variance</li>
+<li>NDVI skewness</li>
+</ul>
+
+<p>
+The final output is a raster with shape:
+</p>
+
+<pre>
+(height, width, 7)
+</pre>
+
+<p>
+This raster serves as the input dataset for downstream
+<b>machine learning models</b>.
+</p>
+
+<p>
+Results and interpretations will be documented in this section.
+</p>
 
 <hr>
 
@@ -341,86 +391,11 @@ src/thess_geo_analytics/
     geo/
     services/
     utils/
+    tools/
 
 outputs/
-
 tests/
 </pre>
-
-<hr>
-
-<h2>Architecture Philosophy</h2>
-
-<h3>geo</h3>
-
-<p>
-Core geospatial algorithms:
-</p>
-
-<ul>
-<li>NDVI computation</li>
-<li>cloud masking</li>
-<li>AOI masking</li>
-<li>window processing</li>
-<li>climatology and anomaly computation</li>
-<li>pixel feature extraction</li>
-</ul>
-
-<h3>builders</h3>
-
-<p>
-Heavy raster transformations such as:
-</p>
-
-<ul>
-<li>NDVI composites</li>
-<li>climatology rasters</li>
-<li>anomaly maps</li>
-<li>feature stacks</li>
-</ul>
-
-<h3>pipelines</h3>
-
-<p>
-High-level orchestration of the processing workflow.
-</p>
-
-<h3>entrypoints</h3>
-
-<p>
-Runnable commands responsible for:
-</p>
-
-<ul>
-<li>loading configuration</li>
-<li>initializing pipelines</li>
-<li>executing processing steps</li>
-</ul>
-
-<h3>services</h3>
-
-<p>
-External IO logic:
-</p>
-
-<ul>
-<li>catalog queries</li>
-<li>scene retrieval</li>
-<li>asset downloads</li>
-</ul>
-
-<hr>
-
-<h2>Requirements</h2>
-
-<ul>
-<li>Python 3.11+</li>
-<li>Rasterio</li>
-<li>NumPy</li>
-<li>Pandas</li>
-<li>GDAL compatible environment</li>
-<li>Docker (recommended)</li>
-</ul>
 
 <hr>
 
@@ -438,6 +413,7 @@ This repository demonstrates:
 </ul>
 
 <p>
-The goal is to build a <b>clean, deployable data pipeline</b> capable of producing
-analysis-ready Earth Observation datasets for temporal analysis and machine learning.
-</p>
+The goal is to build a <b>clean, deployable geospatial data pipeline</b>
+capable of producing analysis-ready Earth Observation datasets for
+temporal analysis and machine learning.
+</p>>
