@@ -248,10 +248,15 @@ class BuildPixelFeaturesPipeline:
 
                                     stack[t_idx] = arr
 
-                                if np.isfinite(stack).sum() == 0:
+                                valid_mask = np.isfinite(stack).any(axis=0)
+
+                                if not valid_mask.any():
                                     feats_tile = np.full((h, w, 7), np.nan, dtype=np.float32)
                                 else:
                                     feats_tile = extractor.compute_features(stack, timestamps)
+
+                                # Force pixels outside the valid AOI footprint to nodata for all 7 bands
+                                feats_tile[~valid_mask, :] = np.nan
 
                                 feats_tile = np.where(np.isnan(feats_tile), out_nodata, feats_tile)
 
