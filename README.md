@@ -1,299 +1,443 @@
-# Thess Geo Analytics
-A Modular and Scalable Sentinel-2 Processing Pipeline
+<h1>Thess Geo Analytics</h1>
 
-Developed by: Alex Rueda Payen (Independent Research Project)  
-(Project aiming to demonstrate EO pipeline engineering skills.)
+<p>
+Sentinel-2 raster processing pipeline for <b>NDVI time-series analysis</b> and 
+<b>pixel-level feature extraction</b>.
+</p>
 
-## Overview
+<p>
+Developed by <b>Alexandre Rueda Payen</b>.
+</p>
 
-Thess Geo Analytics is a fully modular, configuration-driven pipeline for transforming raw Sentinel-2 Level-2A data into analysis-ready products:
+<hr>
 
-- AOI extraction from NUTS boundaries  
-- Sentinel-2 scene catalog creation  
-- Assets manifest generation  
-- Raw band retrieval & organization  
-- Per-timestamp mosaics (tile aggregation)  
-- Optional NDVI monthly/quarterly composites  
+<h2>Project Goal</h2>
 
-The project is designed to be:
+<p>
+This repository implements a <b>geospatial Earth Observation pipeline</b> that transforms 
+Sentinel-2 imagery into <b>analysis-ready datasets</b> for temporal analysis and machine learning.
+</p>
 
-- **Simple to use** → one YAML config  
-- **Technically deep** → scalable architecture, parallelism, efficient caching  
-- **Transparent** → parameters printed at each step  
-- **Reproducible** → deterministic execution  
+<p>
+The pipeline generates:
+</p>
 
-The intent is to showcase a well-engineered EO processing framework, suitable for consideration by institutions such as CERTH, NOA, or other European EO groups.
+<ul>
+<li>NDVI composites</li>
+<li>NDVI climatology rasters</li>
+<li>NDVI anomaly maps</li>
+<li>pixel-level temporal feature stacks</li>
+</ul>
 
----
+<p>
+The long-term objective is to detect <b>clusters of pixels with similar temporal behaviour</b>.
+These patterns may correspond to:
+</p>
 
-## 1. Repository Structure
+<ul>
+<li>environmental disturbances</li>
+<li>disaster impact</li>
+<li>urbanization</li>
+<li>vegetation recovery</li>
+<li>ecosystem resilience or sensitivity</li>
+</ul>
 
-```
-thess-geo-analytics/
-│
-├── config/
-│   ├── pipeline.thess.yaml     # Main user-facing configuration
-│
-├── src/thess_geo_analytics/
-│   ├── entrypoints/            # Makefile entrypoints
-│   │   ├── ExtractAoi.py
-│   │   ├── BuildSceneCatalog.py
-│   │   ├── BuildAssetsManifest.py
-│   │   └── BuildAggregatedTimestamps.py
-│   │
-│   ├── pipelines/              # High-level orchestrators
-│   ├── builders/               # Heavy processing units (mosaics, downloads, etc.)
-│   ├── core/
-│   │   ├── pipeline_config.py  # YAML config → structured access
-│   │   ├── mode_settings.py    # dev/deep scaling logic
-│   │   └── settings.py         # advanced defaults, central paths
-│   │
-│   └── utils/
-│       ├── RepoPaths.py
-│       └── logging_params.py
-│
-├── DATA_LAKE/                  # Auto-created output lake
-├── Makefile
-└── README.md
-```
+<p>
+Future versions will include <b>pixel clustering and anomaly detection models</b>.
+</p>
 
----
+<hr>
 
-## 2. Installation
+<h2>Study Region</h2>
 
-### Prerequisites
+<p>
+The current implementation focuses on:
+</p>
 
-- Python ≥ 3.11  
-- GDAL / Rasterio dependencies  
-- `make` installed  
+<ul>
+<li><b>Thessaloniki (Greece)</b></li>
+</ul>
 
-Optional:
-- CDSE (Copernicus Data Space) credentials  
-- Google Cloud Storage credentials  
+<p>
+Future extensions are planned for:
+</p>
 
-### Setup
+<ul>
+<li><b>Halkidiki</b></li>
+</ul>
 
-```
-git clone https://github.com/<your-repo>/thess-geo-analytics.git
-cd thess-geo-analytics
+<p>
+Current constraints:
+</p>
 
-python -m venv .venv
-source .venv/bin/activate      # Linux/Mac
-.venv\Scripts\activate       # Windows
+<ul>
+<li>The pipeline currently accepts <b>one NUTS level 3 region</b> as input</li>
+<li>Thessaloniki AOI size: <b>~X km²</b></li>
+</ul>
 
-pip install -r requirements.txt
-```
+<hr>
 
-Optional `.env`:
+<h2>Quick Start (Recommended: Docker)</h2>
 
-```
-DATA_LAKE=/path/to/data_lake
-CDSE_USERNAME=...
-CDSE_PASSWORD=...
-```
+<p>
+The pipeline is easiest to run using <b>Docker</b>.  
+This avoids dependency issues related to GDAL, Rasterio, and other geospatial libraries.
+</p>
 
----
+<h3>1. Build the Docker Image</h3>
 
-## 3. Configuration (`pipeline.thess.yaml`)
+<pre>
+docker build -t thess-geo-analytics:0.3.1 .
+</pre>
 
-This is the only file users normally edit.
+<p>
+Typical image size:
+</p>
 
-### Example:
+<pre>
+~2.5 GB
+</pre>
 
-```yaml
-mode: "dev"
-debug: false
+<h3>2. Run the Pipeline</h3>
 
-region: "Thessaloniki"
-aoi_id: "el522"
+<p>
+Example execution command (PowerShell):
+</p>
 
-pipeline:
-  date_start: "2021-01-01"
+<pre>
+docker run -it --rm `
+  -v "C:\...\DATA_LAKE:/data_lake" `
+  -v "C:\...\aoi:/app/aoi" `
+  -v "C:\...\outputs:/app/outputs" `
+  -v "C:\...\config:/app/config:ro" `
+  -v "C:\...\ .env:/app/.env:ro" `
+  --env-file "C:\...\ .env" `
+  -e DATA_LAKE=/data_lake `
+  -e PIPELINE_CONFIG=config/pipeline.thess.yaml `
+  -e THESS_GEO_ROOT=/app `
+  thess-geo-analytics:0.3.1
+</pre>
 
-raster:
-  resolution: 10
+<hr>
 
-scene_catalog:
-  cloud_cover_max: 20.0
-  max_items: 3000
-  full_cover_threshold: 0.95
-  n_anchors: 64
-  window_days: 42
-  collection: "sentinel-2-l2a"
+<h2>Running the Pipeline</h2>
 
-assets_manifest:
-  max_scenes: null
-  upload_to_gcs: false
+<h3>Run a Decoy Pipeline (Mocked Integration Test)</h3>
 
-timestamps_aggregation:
-  merge_method: "first"
-  resampling: "nearest"
-  nodata: 0.0
-  bands: ["B04", "B08", "SCL"]
+<p>
+To validate the orchestration logic without downloading or processing real Sentinel-2 rasters,
+you can run a <b>decoy pipeline</b> using <b>dummy rasters provided through mocks</b>:
+</p>
 
+<pre>
+python -m unittest tests.auto.integration.test_WholePipelineTest -v
+</pre>
 
-ndvi_composites:
-  min_scenes_per_month: 2
-  fallback_to_quarterly: true
-  upload_to_gcs: false
-  strategy: "monthly"
-  max_scenes_per_period: null
-  cloud_masking: true
-```
+<h3>Run the Full Real Pipeline</h3>
 
-### User should focus on:
+<p>
+To execute the complete real pipeline end-to-end:
+</p>
 
-| Section | Purpose |
-|--------|---------|
-| mode | `dev` = quick tests, `deep` = full run |
-| pipeline.date_start | temporal start for all steps |
-| scene_catalog.* | how strict / dense sampling is |
-| raster.resolution | output resolution |
-| upload_to_gcs | whether to upload intermediate results |
-| timestamps_aggregation.* | mosaic behavior |
+<pre>
+make full
+</pre>
 
-Advanced storage rules, paths, and internal defaults live in `settings.py`.
+<h3>Run Individual Steps</h3>
 
----
+<p>
+To run individual pipeline steps while respecting dependencies, use:
+</p>
 
-## 4. Running the Pipeline
+<pre>
+make help
+</pre>
 
-### Individual steps
+<hr>
 
-```
+<h2>Runtime Characteristics</h2>
+
+<ul>
+<li>Typical runtime: <b>~4 hours</b></li>
+<li>Docker image size: <b>~2.5 GB</b></li>
+<li>Pipeline disk usage: <b>~20 GB</b></li>
+<li>Recommended free disk space: <b>≥ 50 GB</b></li>
+</ul>
+
+<hr>
+
+<h2>Memory Management</h2>
+
+<p>
+Memory usage is limited using a WSL2 configuration file:
+</p>
+
+<pre>
+C:\Users\&lt;user&gt;\.wslconfig
+</pre>
+
+<p>
+Example configuration:
+</p>
+
+<pre>
+[wsl2]
+
+memory=3GB
+processors=2
+swap=8GB
+localhostForwarding=true
+</pre>
+
+<p>
+This behaves similarly to <b>Linux cgroups resource limits</b>.
+</p>
+
+<p>
+Typical Sentinel-2 scene size:
+</p>
+
+<pre>
+~150 MB
+</pre>
+
+<p>
+The pipeline opens at most <b>four scenes simultaneously</b>, keeping memory usage around:
+</p>
+
+<pre>
+~600 MB
+</pre>
+
+<p>
+Processing relies on <b>window-based raster operations</b> to avoid loading entire rasters into RAM.
+</p>
+
+<hr>
+
+<h2>Resolution Downscaling</h2>
+
+<p>
+For faster processing the pipeline supports raster downscaling.
+</p>
+
+<p>
+Example:
+</p>
+
+<pre>
+10 m Sentinel-2 → 100 m raster
+</pre>
+
+<p>
+Values are aggregated using the <b>average value within each superpixel</b>.
+</p>
+
+<p>
+This significantly reduces processing time and disk usage while remaining sufficient 
+for <b>regional-scale analysis</b>.
+</p>
+
+<hr>
+
+<h2>Pipeline Overview</h2>
+
+<pre>
+Sentinel-2 scenes
+      ↓
+tile aggregation
+      ↓
+NDVI composites
+      ↓
+NDVI climatology
+      ↓
+NDVI anomaly maps
+      ↓
+pixel time-series feature extraction
+</pre>
+
+<p>
+Outputs include:
+</p>
+
+<ul>
+<li>NDVI rasters</li>
+<li>climatology rasters</li>
+<li>NDVI anomaly rasters</li>
+<li>pixel feature stacks</li>
+</ul>
+
+<hr>
+
+<h2>Running the Pipeline (Makefile)</h2>
+
+<p>
+Available commands:
+</p>
+
+<pre>
 make extract-aoi
 make scene-catalog
 make assets-manifest
 make timestamps-aggregation
-```
+make ndvi-composites
+make anomalies
+make pixel-features
+</pre>
 
-### Full pipeline
+<p>
+Run the full pipeline:
+</p>
 
-```
+<pre>
 make full
-```
+</pre>
 
-Each step prints a structured log:
+<hr>
 
-```
-[ENTRYPOINT] BuildSceneCatalog
-[PARAMETERS]
-  mode = dev
-  region = Thessaloniki
-  aoi_id = el522
-  date_start = 2021-01-01    (Earliest acquisition date)
-  max_items = 3000           (Max STAC items)
-  full_cover_threshold = 0.95 (Tile coverage threshold)
-------------------------------------------------------------
-```
+<h2>Example Outputs</h2>
 
----
+<pre>
+ndvi_2023-05_el522.tif
+ndvi_anomaly_2023-05_el522.tif
+pixel_features_7d_el522.tif
+</pre>
 
-## 5. Pipeline Steps
+<p>
+Outputs are written to:
+</p>
 
-### 1. AOI Extraction
-- Downloads NUTS boundaries if missing  
-- Extracts AOI by region name  
-- Produces a GeoJSON AOI file  
+<pre>
+outputs/
 
-### 2. Scene Catalog
-- Queries Sentinel-2 collection  
-- Filters scenes by cloud cover and AOI coverage  
-- Uses anchor dates + temporal windows  
-- Produces:  
-  - `scenes_s2_all.csv`  
-  - `scenes_selected.csv`  
+    cogs/
+        NDVI rasters
+        anomaly rasters
+        climatology rasters
+        feature rasters
 
-### 3. Assets Manifest
-- Determines required assets for selected scenes  
-- Optionally downloads raw S2 bands  
-- Validates TIFFs  
-- Creates:  
-  - `assets_manifest_selected.csv`  
+    tables/
+        diagnostics
 
-### 4. Timestamp Aggregation
-- Groups tiles by timestamp  
-- Performs mosaicking with user-defined merge + resampling  
-- Saves mosaics under:  
+    figures/
+        PNG previews
+</pre>
 
-```
-DATA_LAKE/data_raw/aggregated/<timestamp>/
-```
+<hr>
 
----
-### 5. NDVI Composite
-- Group timestamps by months or quarter if too sparse
-- Performs a mean over all raster pixel that have been rescale to the corsest
-- Compute the NDVI (Non-Differential Vegetation Index):
+<h2>Repository Architecture</h2>
 
-```
-``
+<pre>
+thess-geo-analytics/
 
-## 6. Recommended Parameter Guidelines
+config/
+    pipeline.thess.yaml
 
-### Development mode (fast)
+src/thess_geo_analytics/
 
-```yaml
-mode: dev
-scene_catalog:
-  max_items: 300–800
-  n_anchors: 8–16
-  window_days: 8–20
-```
+    entrypoints/
+    pipelines/
+    builders/
+    geo/
+    services/
+    utils/
 
-### Production mode
+outputs/
 
-```yaml
-mode: deep
-scene_catalog:
-  max_items: 3000+
-  n_anchors: 64
-  window_days: 42
-```
+tests/
+</pre>
 
-### Cloud cover
-- 5–20% = clean scenes  
-- 20–40% = more frequent dates  
+<hr>
 
-### Resolution
-- **10 m** = best for NDVI + cloud mask  
-- **20 m** = faster, lighter outputs  
+<h2>Architecture Philosophy</h2>
 
----
+<h3>geo</h3>
 
-## 7. Expected Outputs
+<p>
+Core geospatial algorithms:
+</p>
 
-A typical run produces:
+<ul>
+<li>NDVI computation</li>
+<li>cloud masking</li>
+<li>AOI masking</li>
+<li>window processing</li>
+<li>climatology and anomaly computation</li>
+<li>pixel feature extraction</li>
+</ul>
 
-### Tables
-- Scene catalog (full & filtered)  
-- Assets manifest  
-- NDVI composite statistics (to developp):
+<h3>builders</h3>
 
-$\displaystyle \text{NDVI} = \frac{\text{NIR} - \text{RED}}{\text{NIR} + \text{RED}}$
+<p>
+Heavy raster transformations such as:
+</p>
 
-### Rasters
-- Aggregated mosaics per timestamp  
-- NDVI composite rasters 
+<ul>
+<li>NDVI composites</li>
+<li>climatology rasters</li>
+<li>anomaly maps</li>
+<li>feature stacks</li>
+</ul>
 
-### Data Lake Structure
+<h3>pipelines</h3>
 
-```
-DATA_LAKE/
-  data_raw/
-    s2/
-    aggregated/
-  cache/
-```
+<p>
+High-level orchestration of the processing workflow.
+</p>
 
----
+<h3>entrypoints</h3>
 
-## 8. Purpose of This Project
+<p>
+Runnable commands responsible for:
+</p>
 
-This project is built with the intention to demonstrate:
+<ul>
+<li>loading configuration</li>
+<li>initializing pipelines</li>
+<li>executing processing steps</li>
+</ul>
 
-- Earth Observation processing engineering  
-- Scalable architecture design  
-- Clean reproducible pipelines  
-- Experience with Sentinel-2, STAC, mosaicking, caching, tiling  
-- Ability to build realistic production-like EO pipelines  
+<h3>services</h3>
+
+<p>
+External IO logic:
+</p>
+
+<ul>
+<li>catalog queries</li>
+<li>scene retrieval</li>
+<li>asset downloads</li>
+</ul>
+
+<hr>
+
+<h2>Requirements</h2>
+
+<ul>
+<li>Python 3.11+</li>
+<li>Rasterio</li>
+<li>NumPy</li>
+<li>Pandas</li>
+<li>GDAL compatible environment</li>
+<li>Docker (recommended)</li>
+</ul>
+
+<hr>
+
+<h2>Purpose of the Project</h2>
+
+<p>
+This repository demonstrates:
+</p>
+
+<ul>
+<li>Earth Observation raster engineering</li>
+<li>Sentinel-2 processing pipelines</li>
+<li>geospatial data engineering</li>
+<li>reproducible EO workflows</li>
+</ul>
+
+<p>
+The goal is to build a <b>clean, deployable data pipeline</b> capable of producing
+analysis-ready Earth Observation datasets for temporal analysis and machine learning.
+</p>
