@@ -14,7 +14,7 @@ Developed by <b>Alexandre Rueda Payen</b>.
 <h2>Project Goal</h2>
 
 <p>
-This repository implements a <b>geospatial Earth Observation pipeline</b> that transforms 
+This repository implements a <b>geospatial Earth Observation pipeline</b> that transforms
 Sentinel-2 imagery into <b>analysis-ready datasets</b> for temporal analysis and machine learning.
 </p>
 
@@ -42,8 +42,8 @@ These clusters may correspond to:
 </ul>
 
 <p>
-The final goal is to use these features as input to <b>machine learning models</b> capable of 
-detecting spatial patterns and changes in land dynamics.
+The final goal is to use these features as input to <b>machine learning models</b>
+capable of detecting spatial patterns and changes in land dynamics.
 </p>
 
 <hr>
@@ -80,7 +80,7 @@ Current constraints:
 <h2>Quick Start (Recommended: Docker)</h2>
 
 <p>
-The pipeline is easiest to run using <b>Docker</b>.  
+The pipeline is easiest to run using <b>Docker</b>.
 This avoids dependency issues related to GDAL, Rasterio, and other geospatial libraries.
 </p>
 
@@ -118,13 +118,13 @@ docker run -it --rm `
 
 <h2>Running the Pipeline</h2>
 
-<h3>Run a Decoy Pipeline (Mocked Integration Test) (~3 mins)</h3>
+<h3>Run a Decoy Pipeline (Mocked Integration Test) (~3 minutes)</h3>
 
 <pre>
 python -m unittest tests.auto.integration.test_WholePipelineTest -v
 </pre>
 
-<h3>Run the Full Pipeline (~4h) </h3>
+<h3>Run the Full Pipeline (~4 hours)</h3>
 
 <pre>
 make full
@@ -141,7 +141,7 @@ make help
 <h2>Visualizing Results</h2>
 
 <p>
-The repository includes a small visualization utility that generates preview images
+The repository includes a visualization utility that generates preview images
 from the produced rasters.
 </p>
 
@@ -162,7 +162,7 @@ and exports PNG previews to:
 </p>
 
 <pre>
-outputs/figures/
+docs/
 </pre>
 
 <p>
@@ -268,44 +268,48 @@ These parameters resulted in:
 
 <p>
 Although the catalog attempted to retrieve <b>18 equidistant timestamps</b>,
-several scenes were discarded due to:
-</p>
-
-<ul>
-<li>incomplete AOI coverage</li>
-<li>excessive cloud cover</li>
-</ul>
-
-<p>
-The STAC query allows pagination up to thousands of scenes, but increasing
-<code>max_items</code> significantly would slow down the catalog stage.
+several scenes were discarded due to incomplete coverage or excessive cloud cover.
 </p>
 
 <hr>
 
-<h2>Climatology Maps</h2>
+<h2>Example Results and Visual Analysis</h2>
 
 <p>
-The climatology stage computes the <b>typical NDVI behaviour</b> for each pixel
-based on historical observations.
+The following figures illustrate the intermediate and final outputs
+produced by the pipeline.
 </p>
 
+<hr>
+
+<h2>NDVI Climatology Maps</h2>
+
+<h3>Q1</h3>
+<img src="docs/ndvi_climatology/ndvi_climatology_median_Q1_el522.png" width="700">
+
 <p>
-For each period of the year, the pipeline computes:
+Lorem ipsum — analysis of winter vegetation baseline and spatial distribution.
 </p>
 
-<ul>
-<li>pixel-wise median NDVI</li>
-<li>monthly or quarterly NDVI statistics</li>
-</ul>
+<h3>Q2</h3>
+<img src="docs/ndvi_climatology/ndvi_climatology_median_Q2_el522.png" width="700">
 
 <p>
-These climatology rasters represent the <b>baseline vegetation state</b>
-against which anomalies are later computed.
+Lorem ipsum — discussion of peak vegetation season.
 </p>
 
+<h3>Q3</h3>
+<img src="docs/ndvi_climatology/ndvi_climatology_median_Q3_el522.png" width="700">
+
 <p>
-Results and observations will be documented here.
+Lorem ipsum — late summer vegetation patterns.
+</p>
+
+<h3>Q4</h3>
+<img src="docs/ndvi_climatology/ndvi_climatology_median_Q4_el522.png" width="700">
+
+<p>
+Lorem ipsum — seasonal vegetation decline.
 </p>
 
 <hr>
@@ -313,25 +317,27 @@ Results and observations will be documented here.
 <h2>NDVI Anomaly Time Series</h2>
 
 <p>
-An NDVI anomaly is defined as:
+NDVI anomaly is defined as:
 </p>
 
 <pre>
 NDVI anomaly = NDVI_observed − NDVI_climatology
 </pre>
 
-<p>
-This produces a temporal stack of rasters describing
-how vegetation deviates from its expected behaviour.
-</p>
+<h3>Example: 2023 Q1</h3>
+
+<img src="docs/ndvi_anomaly/ndvi_anomaly_2023-Q1_el522.png" width="700">
 
 <p>
-These anomaly rasters form the <b>core time series of interest</b>
-used to detect disturbances and recovery patterns.
+Lorem ipsum — interpretation of anomaly signals.
 </p>
 
+<h3>Example: 2024 Q3</h3>
+
+<img src="docs/ndvi_anomaly/ndvi_anomaly_2024-Q3_el522.png" width="700">
+
 <p>
-The anomaly time series extracted for Thessaloniki will be analyzed here.
+Lorem ipsum — discussion of vegetation deviations.
 </p>
 
 <hr>
@@ -339,11 +345,8 @@ The anomaly time series extracted for Thessaloniki will be analyzed here.
 <h2>Pixel Feature Encoding (7D)</h2>
 
 <p>
-The anomaly time series is then encoded into a <b>7-dimensional feature vector per pixel</b>.
-</p>
-
-<p>
-Each pixel is summarized using the following features:
+The anomaly time series is encoded into a <b>7-dimensional feature vector</b>
+for each pixel.
 </p>
 
 <ul>
@@ -356,22 +359,26 @@ Each pixel is summarized using the following features:
 <li>NDVI skewness</li>
 </ul>
 
-<p>
-The final output is a raster with shape:
-</p>
+<h3>Band 1 — Trend</h3>
+<img src="docs/pixel_features/pixel_features_7d_el522_band_1.png" width="700">
 
-<pre>
-(height, width, 7)
-</pre>
+<h3>Band 2 — Seasonal Variability</h3>
+<img src="docs/pixel_features/pixel_features_7d_el522_band_2.png" width="700">
 
-<p>
-This raster serves as the input dataset for downstream
-<b>machine learning models</b>.
-</p>
+<h3>Band 3 — Minimum Anomaly</h3>
+<img src="docs/pixel_features/pixel_features_7d_el522_band_3.png" width="700">
 
-<p>
-Results and interpretations will be documented in this section.
-</p>
+<h3>Band 4 — Recovery Ratio</h3>
+<img src="docs/pixel_features/pixel_features_7d_el522_band_4.png" width="700">
+
+<h3>Band 5 — Anomaly Persistence</h3>
+<img src="docs/pixel_features/pixel_features_7d_el522_band_5.png" width="700">
+
+<h3>Band 6 — NDVI Variance</h3>
+<img src="docs/pixel_features/pixel_features_7d_el522_band_6.png" width="700">
+
+<h3>Band 7 — NDVI Skewness</h3>
+<img src="docs/pixel_features/pixel_features_7d_el522_band_7.png" width="700">
 
 <hr>
 
@@ -384,7 +391,6 @@ config/
     pipeline.thess.yaml
 
 src/thess_geo_analytics/
-
     entrypoints/
     pipelines/
     builders/
@@ -393,7 +399,7 @@ src/thess_geo_analytics/
     utils/
     tools/
 
-outputs/
+docs/
 tests/
 </pre>
 
@@ -414,6 +420,6 @@ This repository demonstrates:
 
 <p>
 The goal is to build a <b>clean, deployable geospatial data pipeline</b>
-capable of producing analysis-ready Earth Observation datasets for
-temporal analysis and machine learning.
-</p>>
+capable of producing analysis-ready Earth Observation datasets
+for temporal analysis and machine learning.
+</p>
