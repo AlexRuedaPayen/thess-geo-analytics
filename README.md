@@ -210,17 +210,6 @@ and exports PNG previews to:
 docs/
 </pre>
 
-<p>
-This tool is useful for quickly inspecting:
-</p>
-
-<ul>
-<li>NDVI composites</li>
-<li>NDVI anomalies</li>
-<li>NDVI climatology maps</li>
-<li>pixel feature rasters</li>
-</ul>
-
 <hr>
 
 <h2>Runtime Characteristics</h2>
@@ -278,15 +267,6 @@ It compares near-infrared reflectance and red reflectance to estimate vegetation
 density and vegetation activity.
 </p>
 
-<p>
-Healthy vegetation reflects strongly in the <b>near-infrared (NIR)</b> spectrum
-while absorbing light in the <b>red</b> spectrum due to chlorophyll.
-</p>
-
-<p>
-NDVI is defined as:
-</p>
-
 <p align="center">
 <b>NDVI = (NIR − RED) / (NIR + RED)</b>
 </p>
@@ -300,15 +280,36 @@ For Sentinel-2 imagery:
 <li><b>B04</b> — Red</li>
 </ul>
 
+<h3>Observed NDVI Limitations</h3>
+
 <p>
-Typical interpretation:
+During analysis it was observed that some non-vegetated surfaces such as water bodies
+and dense urban areas occasionally exhibited slightly positive NDVI values.
+</p>
+
+<p>
+Possible causes include:
 </p>
 
 <ul>
-<li>Values close to <b>1</b> → dense vegetation</li>
-<li>Values around <b>0</b> → bare soil or sparse vegetation</li>
-<li>Negative values → water, clouds, or non-vegetated surfaces</li>
+<li>mixed pixels at coarse spatial resolution</li>
+<li>surface reflectance noise</li>
+<li>atmospheric correction artefacts</li>
+<li>subpixel vegetation or algae presence</li>
 </ul>
+
+<p>
+To validate the NDVI computation itself, a synthetic reconstruction test was implemented.
+</p>
+
+<pre>
+tests.auto.unit.test_NdviReconstructionFromSyntheticBandsTest
+</pre>
+
+<p>
+This test reconstructs NDVI values from synthetic red and NIR bands to ensure
+the NDVI processor correctly computes the index.
+</p>
 
 <hr>
 
@@ -347,6 +348,18 @@ ndvi_composites:
 </pre>
 
 <p>
+These parameters control:
+</p>
+
+<ul>
+<li>scene filtering thresholds</li>
+<li>temporal sampling density</li>
+<li>cloud filtering</li>
+<li>NDVI compositing strategy</li>
+<li>output raster resolution</li>
+</ul>
+
+<p>
 These parameters resulted in:
 </p>
 
@@ -357,16 +370,6 @@ These parameters resulted in:
 <li><b>11 quarterly NDVI rasters</b> generated</li>
 </ul>
 
-<p>
-Although the catalog attempted to retrieve <b>18 equidistant timestamps</b>,
-several scenes were discarded due to incomplete coverage or excessive cloud cover.
-</p>
-
-<p>
-The STAC request could have retrieved more candidates by increasing
-<code>max_items</code> further, but this would have made the catalog stage slower.
-</p>
-
 <hr>
 
 <h2>Example Results and Visual Analysis</h2>
@@ -375,15 +378,12 @@ The STAC request could have retrieved more candidates by increasing
 The following figures illustrate the intermediate and final outputs produced by the pipeline.
 </p>
 
-<hr>
-
 <h2>NDVI Climatology Maps</h2>
 
 <p>
 These maps represent the <b>median NDVI value</b> observed for each season
 (quarter of the year). The median is used instead of the mean because it is
-more robust to outliers such as residual cloud contamination, atmospheric noise,
-or temporary abnormal observations.
+more robust to outliers such as residual cloud contamination or atmospheric noise.
 </p>
 
 <h3>Q1</h3>
@@ -400,7 +400,7 @@ areas around Perea appear slightly higher.
 
 <p>
 Vegetation remains relatively low around the Axios Delta but increases strongly in Chortiatis.
-This is consistent with spring conditions, when vegetation activity rises across most of the region.
+This is consistent with spring conditions.
 </p>
 
 <h3>Q3</h3>
@@ -408,150 +408,98 @@ This is consistent with spring conditions, when vegetation activity rises across
 
 <p>
 The dry season begins. The Perea subregion becomes substantially less vegetated,
-while Chortiatis remains high, likely due to altitude and lower temperatures.
-Vegetation remains comparatively strong in parts of the Axios Delta.
+while Chortiatis remains high.
 </p>
 
 <h3>Q4</h3>
 <img src="docs/ndvi_climatology/ndvi_climatology_median_Q4_el522.png" width="700">
 
 <p>
-Vegetation decreases across most of the AOI as the system transitions toward winter conditions.
+Vegetation decreases across most of the AOI as winter approaches.
 </p>
 
 <hr>
 
 <h2>NDVI Anomaly Time Series</h2>
 
-<p>
-NDVI anomaly is defined as:
-</p>
-
 <p align="center">
 <b>NDVI<sub>anomaly</sub> = NDVI<sub>observed</sub> − NDVI<sub>climatology</sub></b>
 </p>
 
-<p>
-These anomaly rasters describe how vegetation deviates from its typical seasonal behaviour.
-They are the time series of interest later encoded into per-pixel features.
-</p>
-
-<h3>Example: 2023 Q1</h3>
-
 <img src="docs/ndvi_anomaly/ndvi_anomaly_2023-Q1_el522.png" width="700">
 
-<p>
-The anomalies here are relatively small and localized. Since the climatology is currently based on
-a short history, deviations from the baseline remain limited in magnitude.
-</p>
-
-<h3>Example: 2024 Q3</h3>
-
 <img src="docs/ndvi_anomaly/ndvi_anomaly_2024-Q3_el522.png" width="700">
-
-<p>
-The same general remark applies, although summer 2024 appears slightly drier and hotter than
-summer 2023 and summer 2025, with more negative anomaly values over several parts of the AOI.
-</p>
 
 <hr>
 
 <h2>Pixel Feature Encoding (7D)</h2>
 
-<p>
-The anomaly time series is encoded into a <b>7-dimensional feature vector</b>
-for each pixel.
-</p>
-
 <ul>
-<li><b>Trend slope</b> — linear trend of NDVI anomalies over time, indicating long-term vegetation increase or decline.</li>
-<li><b>Seasonal variability</b> — standard deviation of seasonal anomalies, capturing how strongly vegetation fluctuates over time.</li>
-<li><b>Minimum anomaly</b> — lowest anomaly observed in the time series, highlighting extreme vegetation stress events.</li>
-<li><b>Recovery ratio</b> — ratio between late-period NDVI and early-period NDVI, measuring vegetation recovery after disturbances.</li>
-<li><b>Anomaly persistence</b> — number of time steps where NDVI anomalies fall below a negative threshold, representing sustained vegetation stress.</li>
-<li><b>NDVI variance</b> — overall variance of NDVI values across the time series, describing the magnitude of vegetation variability.</li>
-<li><b>NDVI skewness</b> — asymmetry of the NDVI distribution, indicating whether vegetation behaviour is dominated by negative or positive events.</li>
+<li><b>Trend slope</b></li>
+<li><b>Seasonal variability</b></li>
+<li><b>Minimum anomaly</b></li>
+<li><b>Recovery ratio</b></li>
+<li><b>Anomaly persistence</b></li>
+<li><b>NDVI variance</b></li>
+<li><b>NDVI skewness</b></li>
 </ul>
 
-<h3>Band 1 — Trend Slope</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_1.png" width="700">
-
-<p>
-This band represents the long-term NDVI trend. Positive values indicate areas where vegetation
-activity has increased over the observation period, while negative values correspond to areas
-experiencing vegetation decline.
-</p>
-
-<h3>Band 2 — Seasonal Variability</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_2.png" width="700">
-
-<p>
-This band captures how strongly vegetation fluctuates through time. Higher values are expected
-in landscapes with marked seasonal cycles, such as croplands or strongly dynamic vegetation systems.
-</p>
-
-<h3>Band 3 — Minimum Anomaly</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_3.png" width="700">
-
-<p>
-This band records the most severe negative deviation observed for each pixel and highlights
-locations that experienced strong vegetation stress at least once during the time series.
-</p>
-
-<h3>Band 4 — Recovery Ratio</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_4.png" width="700">
-
-<p>
-This band compares late-period vegetation conditions to early-period vegetation conditions.
-It is intended to reveal areas showing recovery or, conversely, persistent degradation.
-</p>
-
-<h3>Band 5 — Anomaly Persistence</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_5.png" width="700">
-
-<p>
-This band counts how many periods a pixel remained under a negative anomaly threshold.
-It is useful for identifying areas under repeated or sustained vegetation stress.
-</p>
-
-<h3>Band 6 — NDVI Variance</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_6.png" width="700">
-
-<p>
-This band measures the overall amplitude of NDVI variation through time,
-distinguishing relatively stable ecosystems from highly dynamic landscapes.
-</p>
-
-<h3>Band 7 — NDVI Skewness</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_7.png" width="700">
-
-<p>
-This band describes the asymmetry of the NDVI temporal distribution.
-It can help distinguish pixels dominated by episodic negative events from those dominated by positive peaks.
-</p>
 
 <hr>
 
 <h2>Repository Architecture</h2>
 
+<p>
+The repository is structured to separate algorithmic logic,
+pipeline orchestration, and infrastructure components.
+</p>
+
 <pre>
-thess-geo-analytics/
-
-config/
-    pipeline.thess.yaml
-
 src/thess_geo_analytics/
-    entrypoints/
-    pipelines/
-    builders/
-    geo/
-    services/
-    utils/
-    tools/
 
-docs/
-tests/
+entrypoints/
+pipelines/
+builders/
+geo/
+services/
+utils/
+tools/
 </pre>
+
+<ul>
+<li><b>entrypoints</b> — CLI entry scripts used by the Makefile</li>
+<li><b>pipelines</b> — orchestration of processing stages</li>
+<li><b>builders</b> — heavy raster transformations</li>
+<li><b>geo</b> — core geospatial algorithms</li>
+<li><b>services</b> — interaction with external APIs</li>
+<li><b>utils</b> — shared helper utilities</li>
+<li><b>tools</b> — debugging and visualization utilities</li>
+</ul>
+
+<hr>
+
+<h2>Technical Documentation (Wiki)</h2>
+
+<p>
+Detailed explanations of algorithms and design decisions are available in the Wiki.
+</p>
+
+<ul>
+<li><a href="https://github.com/AlexRuedaPayen/thess-geo-analytics/wiki/AOI-Raster-Window">AOI Raster Window</a></li>
+<li><a href="https://github.com/AlexRuedaPayen/thess-geo-analytics/wiki/Cloud-Masker">Cloud Masker</a></li>
+<li><a href="https://github.com/AlexRuedaPayen/thess-geo-analytics/wiki/NDVI-Aggregated-Composite-Builder">NDVI Aggregated Composite Builder</a></li>
+<li><a href="https://github.com/AlexRuedaPayen/thess-geo-analytics/wiki/Ndvi-Processor">NDVI Processor</a></li>
+<li><a href="https://github.com/AlexRuedaPayen/thess-geo-analytics/wiki/Pipeline-Nvdi-Anomaly-Maps">NDVI Anomaly Pipeline</a></li>
+<li><a href="https://github.com/AlexRuedaPayen/thess-geo-analytics/wiki/Pipeline-Pixel-Features">Pixel Feature Pipeline</a></li>
+<li><a href="https://github.com/AlexRuedaPayen/thess-geo-analytics/wiki/Pixel-Feature-Extractor">Pixel Feature Extractor</a></li>
+</ul>
 
 <hr>
 
