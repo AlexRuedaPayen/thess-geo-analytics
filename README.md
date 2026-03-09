@@ -512,90 +512,188 @@ If your Dockerfile has a different name or location, update this command.
 
 <hr>
 
+<h2>Docker Execution</h2>
+
+<p>
+The pipeline can be executed inside a Docker container.  
+This avoids dependency issues related to GDAL / Rasterio and ensures a reproducible environment.
+</p>
+
+<p>
+Outputs are written outside the container using <b>volume mounts</b>, so generated rasters remain accessible on the host machine.
+</p>
+
+<hr>
+
+<h3>1. Build the Docker image</h3>
+
+<pre>
+docker build -t thess-geo-analytics:0.3.1 .
+</pre>
+
+<p>
+Run this command from the repository root.
+</p>
+
+<hr>
+
 <h3>2. Run the container</h3>
+
+<p>
+Example execution command (PowerShell):
+</p>
+
+<pre>
+docker run -it --rm `
+  -v "C:\Users\alexr\OneDrive\Documents\thess-geo-analytics-0.3.1\DATA_LAKE:/data_lake" `
+  -v "C:\Users\alexr\OneDrive\Documents\thess-geo-analytics-0.3.1\aoi:/app/aoi" `
+  -v "C:\Users\alexr\OneDrive\Documents\thess-geo-analytics-0.3.1\outputs:/app/outputs" `
+  -v "C:\Users\alexr\OneDrive\Documents\thess-geo-analytics-0.3.1\config:/app/config:ro" `
+  -v "C:\Users\alexr\OneDrive\Desktop\thess-geo-analytics\.env:/app/.env:ro" `
+  --env-file "C:\Users\alexr\OneDrive\Desktop\thess-geo-analytics\.env" `
+  -e DATA_LAKE=/data_lake `
+  -e PIPELINE_CONFIG=config/pipeline.thess.yaml `
+  -e THESS_GEO_ROOT=/app `
+  thess-geo-analytics:0.3.1
+</pre>
+
+<hr>
+
+<h3>3. Volume Mounts</h3>
+
+<p>
+The container relies on several mounted directories:
+</p>
+
+<ul>
+
+<li>
+<b>DATA_LAKE</b>  
+<pre>
+C:\...\DATA_LAKE:/data_lake
+</pre>
+Raw satellite data and intermediate rasters.
+</li>
+
+<li>
+<b>AOI folder</b>  
+<pre>
+C:\...\aoi:/app/aoi
+</pre>
+Contains AOI geometries.
+</li>
+
+<li>
+<b>Outputs</b>  
+<pre>
+C:\...\outputs:/app/outputs
+</pre>
+All generated rasters and tables are written here.
+</li>
+
+<li>
+<b>Configuration</b>  
+<pre>
+C:\...\config:/app/config:ro
+</pre>
+Pipeline configuration file.
+</li>
+
+<li>
+<b>.env file</b>  
+<pre>
+C:\...\ .env:/app/.env:ro
+</pre>
+Credentials for satellite data services.
+</li>
+
+</ul>
+
+<hr>
+
+<h3>4. Required Environment Variables</h3>
+
+<p>
+The pipeline requires credentials for accessing Sentinel-2 data providers.
+</p>
+
+<p>
+These must be stored in a <code>.env</code> file.
+</p>
 
 <p>
 Example:
 </p>
 
 <pre>
-docker run \
-  -v $(pwd)/outputs:/app/outputs \
-  -v $(pwd)/config:/app/config \
-  thess-geo-analytics
+SH_CLIENT_ID=xxxx
+SH_CLIENT_SECRET=xxxx
+
+CDSE_USERNAME=xxxx
+CDSE_PASSWORD=xxxx
 </pre>
 
 <p>
-Explanation:
+Where:
 </p>
 
 <ul>
-  <li><code>-v $(pwd)/outputs:/app/outputs</code> mounts the output folder so rasters and tables are stored on the host</li>
-  <li><code>-v $(pwd)/config:/app/config</code> mounts the config folder so parameters can be changed without rebuilding the image</li>
+
+<li>
+<b>SH_CLIENT_ID / SH_CLIENT_SECRET</b>  
+Credentials for <b>Sentinel Hub</b>.
+</li>
+
+<li>
+<b>CDSE_USERNAME / CDSE_PASSWORD</b>  
+Credentials for <b>Copernicus Data Space Ecosystem</b>.
+</li>
+
 </ul>
 
 <p>
-Windows PowerShell example:
+The container reads these values through:
 </p>
 
 <pre>
-docker run `
-  -v ${PWD}/outputs:/app/outputs `
-  -v ${PWD}/config:/app/config `
-  thess-geo-analytics
+--env-file path/to/.env
 </pre>
-
-<p>
-<!-- TODO -->
-Adjust <code>/app</code> if your container uses another working directory.
-</p>
 
 <hr>
 
-<h3>3. Run a specific pipeline step inside Docker</h3>
+<h3>5. Notes</h3>
 
-<p>
-Example: build NDVI anomaly maps
-</p>
+<ul>
 
-<pre>
-docker run \
-  -v $(pwd)/outputs:/app/outputs \
-  -v $(pwd)/config:/app/config \
-  thess-geo-analytics \
-  python -m thess_geo_analytics.entrypoints.BuildNdviAnomalyMaps
-</pre>
+<li>
+The container environment ensures compatibility with GDAL and Rasterio.
+</li>
 
-<p>
-Example: build pixel features
-</p>
+<li>
+All raster outputs are written to the mounted <code>outputs/</code> directory.
+</li>
 
-<pre>
-docker run \
-  -v $(pwd)/outputs:/app/outputs \
-  -v $(pwd)/config:/app/config \
-  thess-geo-analytics \
-  python -m thess_geo_analytics.entrypoints.BuildPixelFeatures
-</pre>
+<li>
+Configuration changes can be applied by editing <code>config/pipeline.thess.yaml</code> without rebuilding the image.
+</li>
 
-<p>
-This is useful when you want to run only one stage of the pipeline.
-</p>
+</ul>
 
 <hr>
 
-<h3>4. Interactive container session</h3>
-
-<pre>
-docker run -it \
-  -v $(pwd)/outputs:/app/outputs \
-  -v $(pwd)/config:/app/config \
-  thess-geo-analytics \
-  /bin/bash
-</pre>
+<h3>Credentials Access</h3>
 
 <p>
-This can be useful for debugging paths, inspecting installed dependencies, or testing commands manually.
+If you do not have Copernicus or Sentinel Hub credentials and need them for testing the pipeline,
+you may contact:
+</p>
+
+<p>
+<b>alexruedapayen@gmail.com</b>
+</p>
+
+<p>
+Temporary access may be provided for demonstration or evaluation purposes.
 </p>
 
 <hr>
