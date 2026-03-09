@@ -1,7 +1,7 @@
 <h1>Thess Geo Analytics</h1>
 
 <p>
-Sentinel-2 raster processing pipeline for <b>NDVI time-series analysis</b> and 
+Sentinel-2 raster processing pipeline for <b>NDVI time-series analysis</b> and
 <b>pixel-level feature extraction</b>.
 </p>
 
@@ -98,7 +98,40 @@ Typical image size:
 ~2.5 GB
 </pre>
 
-<h3>2. Run the Pipeline</h3>
+<h3>2. Prepare the <code>.env</code> File</h3>
+
+<p>
+The pipeline requires credentials for the satellite data services used during scene retrieval.
+Create a <code>.env</code> file at the root of the project and store the required secrets there.
+</p>
+
+<p>
+Example:
+</p>
+
+<pre>
+SH_CLIENT_ID=xxxx
+SH_CLIENT_SECRET=xxxx
+
+CDSE_USERNAME=xxxx
+CDSE_PASSWORD=xxxx
+</pre>
+
+<p>
+Where:
+</p>
+
+<ul>
+<li><b>SH_CLIENT_ID / SH_CLIENT_SECRET</b> — Sentinel Hub credentials</li>
+<li><b>CDSE_USERNAME / CDSE_PASSWORD</b> — Copernicus Data Space Ecosystem credentials</li>
+</ul>
+
+<p>
+When running the container, this file is mounted read-only and also passed through
+<code>--env-file</code>.
+</p>
+
+<h3>3. Run the Pipeline</h3>
 
 <pre>
 docker run -it --rm `
@@ -113,6 +146,18 @@ docker run -it --rm `
   -e THESS_GEO_ROOT=/app `
   thess-geo-analytics:0.3.1
 </pre>
+
+<p>
+Mounted directories typically include:
+</p>
+
+<ul>
+<li><b>DATA_LAKE</b> — raw Sentinel-2 assets and intermediate rasters</li>
+<li><b>aoi</b> — AOI geometries and masks</li>
+<li><b>outputs</b> — generated rasters, tables, and preview figures</li>
+<li><b>config</b> — pipeline configuration files</li>
+<li><b>.env</b> — secrets and provider credentials</li>
+</ul>
 
 <hr>
 
@@ -219,6 +264,52 @@ keeping memory usage below roughly:
 ~600 MB
 </pre>
 
+<p>
+Processing relies on block-wise raster operations to avoid loading entire rasters into RAM.
+</p>
+
+<hr>
+
+<h2>Normalized Difference Vegetation Index (NDVI)</h2>
+
+<p>
+NDVI is one of the most widely used vegetation indicators in Earth Observation.
+It compares near-infrared reflectance and red reflectance to estimate vegetation
+density and vegetation activity.
+</p>
+
+<p>
+Healthy vegetation reflects strongly in the <b>near-infrared (NIR)</b> spectrum
+while absorbing light in the <b>red</b> spectrum due to chlorophyll.
+</p>
+
+<p>
+NDVI is defined as:
+</p>
+
+<p align="center">
+<b>NDVI = (NIR − RED) / (NIR + RED)</b>
+</p>
+
+<p>
+For Sentinel-2 imagery:
+</p>
+
+<ul>
+<li><b>B08</b> — Near Infrared (NIR)</li>
+<li><b>B04</b> — Red</li>
+</ul>
+
+<p>
+Typical interpretation:
+</p>
+
+<ul>
+<li>Values close to <b>1</b> → dense vegetation</li>
+<li>Values around <b>0</b> → bare soil or sparse vegetation</li>
+<li>Negative values → water, clouds, or non-vegetated surfaces</li>
+</ul>
+
 <hr>
 
 <h2>Pipeline Parameters</h2>
@@ -271,45 +362,61 @@ Although the catalog attempted to retrieve <b>18 equidistant timestamps</b>,
 several scenes were discarded due to incomplete coverage or excessive cloud cover.
 </p>
 
+<p>
+The STAC request could have retrieved more candidates by increasing
+<code>max_items</code> further, but this would have made the catalog stage slower.
+</p>
+
 <hr>
 
 <h2>Example Results and Visual Analysis</h2>
 
 <p>
-The following figures illustrate the intermediate and final outputs
-produced by the pipeline.
+The following figures illustrate the intermediate and final outputs produced by the pipeline.
 </p>
 
 <hr>
 
 <h2>NDVI Climatology Maps</h2>
 
+<p>
+These maps represent the <b>median NDVI value</b> observed for each season
+(quarter of the year). The median is used instead of the mean because it is
+more robust to outliers such as residual cloud contamination, atmospheric noise,
+or temporary abnormal observations.
+</p>
+
 <h3>Q1</h3>
 <img src="docs/ndvi_climatology/ndvi_climatology_median_Q1_el522.png" width="700">
 
 <p>
-Lorem ipsum — analysis of winter vegetation baseline and spatial distribution.
+We can see the body of water (Limni Volvi and Periferiaki zoni B) having an NDVI close to 0.00.
+Chortiatis mountain area and the Axios Delta show relatively low values, while some agricultural
+areas around Perea appear slightly higher.
 </p>
 
 <h3>Q2</h3>
 <img src="docs/ndvi_climatology/ndvi_climatology_median_Q2_el522.png" width="700">
 
 <p>
-Lorem ipsum — discussion of peak vegetation season.
+Vegetation remains relatively low around the Axios Delta but increases strongly in Chortiatis.
+This is consistent with spring conditions, when vegetation activity rises across most of the region.
 </p>
 
 <h3>Q3</h3>
 <img src="docs/ndvi_climatology/ndvi_climatology_median_Q3_el522.png" width="700">
 
 <p>
-Lorem ipsum — late summer vegetation patterns.
+The dry season begins. The Perea subregion becomes substantially less vegetated,
+while Chortiatis remains high, likely due to altitude and lower temperatures.
+Vegetation remains comparatively strong in parts of the Axios Delta.
 </p>
 
 <h3>Q4</h3>
 <img src="docs/ndvi_climatology/ndvi_climatology_median_Q4_el522.png" width="700">
 
 <p>
-Lorem ipsum — seasonal vegetation decline.
+Vegetation decreases across most of the AOI as the system transitions toward winter conditions.
 </p>
 
 <hr>
@@ -320,16 +427,22 @@ Lorem ipsum — seasonal vegetation decline.
 NDVI anomaly is defined as:
 </p>
 
-<pre>
-NDVI anomaly = NDVI_observed − NDVI_climatology
-</pre>
+<p align="center">
+<b>NDVI<sub>anomaly</sub> = NDVI<sub>observed</sub> − NDVI<sub>climatology</sub></b>
+</p>
+
+<p>
+These anomaly rasters describe how vegetation deviates from its typical seasonal behaviour.
+They are the time series of interest later encoded into per-pixel features.
+</p>
 
 <h3>Example: 2023 Q1</h3>
 
 <img src="docs/ndvi_anomaly/ndvi_anomaly_2023-Q1_el522.png" width="700">
 
 <p>
-Lorem ipsum — interpretation of anomaly signals.
+The anomalies here are relatively small and localized. Since the climatology is currently based on
+a short history, deviations from the baseline remain limited in magnitude.
 </p>
 
 <h3>Example: 2024 Q3</h3>
@@ -337,7 +450,8 @@ Lorem ipsum — interpretation of anomaly signals.
 <img src="docs/ndvi_anomaly/ndvi_anomaly_2024-Q3_el522.png" width="700">
 
 <p>
-Lorem ipsum — discussion of vegetation deviations.
+The same general remark applies, although summer 2024 appears slightly drier and hotter than
+summer 2023 and summer 2025, with more negative anomaly values over several parts of the AOI.
 </p>
 
 <hr>
@@ -350,35 +464,71 @@ for each pixel.
 </p>
 
 <ul>
-<li>trend slope</li>
-<li>seasonal variability</li>
-<li>minimum anomaly</li>
-<li>recovery ratio</li>
-<li>anomaly persistence</li>
-<li>NDVI variance</li>
-<li>NDVI skewness</li>
+<li><b>Trend slope</b> — linear trend of NDVI anomalies over time, indicating long-term vegetation increase or decline.</li>
+<li><b>Seasonal variability</b> — standard deviation of seasonal anomalies, capturing how strongly vegetation fluctuates over time.</li>
+<li><b>Minimum anomaly</b> — lowest anomaly observed in the time series, highlighting extreme vegetation stress events.</li>
+<li><b>Recovery ratio</b> — ratio between late-period NDVI and early-period NDVI, measuring vegetation recovery after disturbances.</li>
+<li><b>Anomaly persistence</b> — number of time steps where NDVI anomalies fall below a negative threshold, representing sustained vegetation stress.</li>
+<li><b>NDVI variance</b> — overall variance of NDVI values across the time series, describing the magnitude of vegetation variability.</li>
+<li><b>NDVI skewness</b> — asymmetry of the NDVI distribution, indicating whether vegetation behaviour is dominated by negative or positive events.</li>
 </ul>
 
-<h3>Band 1 — Trend</h3>
+<h3>Band 1 — Trend Slope</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_1.png" width="700">
+
+<p>
+This band represents the long-term NDVI trend. Positive values indicate areas where vegetation
+activity has increased over the observation period, while negative values correspond to areas
+experiencing vegetation decline.
+</p>
 
 <h3>Band 2 — Seasonal Variability</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_2.png" width="700">
 
+<p>
+This band captures how strongly vegetation fluctuates through time. Higher values are expected
+in landscapes with marked seasonal cycles, such as croplands or strongly dynamic vegetation systems.
+</p>
+
 <h3>Band 3 — Minimum Anomaly</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_3.png" width="700">
+
+<p>
+This band records the most severe negative deviation observed for each pixel and highlights
+locations that experienced strong vegetation stress at least once during the time series.
+</p>
 
 <h3>Band 4 — Recovery Ratio</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_4.png" width="700">
 
+<p>
+This band compares late-period vegetation conditions to early-period vegetation conditions.
+It is intended to reveal areas showing recovery or, conversely, persistent degradation.
+</p>
+
 <h3>Band 5 — Anomaly Persistence</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_5.png" width="700">
+
+<p>
+This band counts how many periods a pixel remained under a negative anomaly threshold.
+It is useful for identifying areas under repeated or sustained vegetation stress.
+</p>
 
 <h3>Band 6 — NDVI Variance</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_6.png" width="700">
 
+<p>
+This band measures the overall amplitude of NDVI variation through time,
+distinguishing relatively stable ecosystems from highly dynamic landscapes.
+</p>
+
 <h3>Band 7 — NDVI Skewness</h3>
 <img src="docs/pixel_features/pixel_features_7d_el522_band_7.png" width="700">
+
+<p>
+This band describes the asymmetry of the NDVI temporal distribution.
+It can help distinguish pixels dominated by episodic negative events from those dominated by positive peaks.
+</p>
 
 <hr>
 
