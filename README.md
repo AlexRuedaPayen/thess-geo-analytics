@@ -904,4 +904,5 @@ This repository was developed as an independent project to demonstrate:
 
 <p>
 The goal is to produce analysis-ready EO datasets suitable for downstream machine learning tasks.
+In future version we will implement pixel-wise clustering to determinate for instance disaster zones, sensitive zones, urban zones, re-vegetalized zone etc.
 </p>
