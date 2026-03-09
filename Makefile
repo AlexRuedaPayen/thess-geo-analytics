@@ -54,7 +54,7 @@ test:
 visualize:
 	@echo "_____________________________________________________________"
 	@echo "[QA] Export raster preview PNGs"
-	$(PYTHON) -m thess_geo_analytics.tools.visualize_outputs \
+	$(PYTHON) -m thess_geo_analytics.qa.VisualizeOutputs \
 		--cogs-dir outputs/cogs \
 		--save-previews \
 		--out-dir outputs/figures \
@@ -64,7 +64,7 @@ visualize:
 visualize-interactive:
 	@echo "_____________________________________________________________"
 	@echo "[QA] Interactive raster visualization"
-	$(PYTHON) -m thess_geo_analytics.tools.visualize_outputs \
+	$(PYTHON) -m thess_geo_analytics.qa.VisualizeOutputs \
 		--cogs-dir outputs/cogs
 
 # ------------------------
