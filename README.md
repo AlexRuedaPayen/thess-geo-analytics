@@ -82,12 +82,14 @@ Current constraints:
 <p>
 The pipeline is easiest to run using <b>Docker</b>.
 This avoids dependency issues related to GDAL, Rasterio, and other geospatial libraries.
+
+Recommended version : 2.0.0 (see latest release)
 </p>
 
 <h3>1. Build the Docker Image</h3>
 
 <pre>
-docker build -t thess-geo-analytics:0.3.1 .
+docker build -t thess-geo-analytics:2.0.0 .
 </pre>
 
 <p>
@@ -499,6 +501,7 @@ Detailed explanations of algorithms and design decisions are available in the Wi
 <li><a href="https://github.com/AlexRuedaPayen/thess-geo-analytics/wiki/Pipeline-Nvdi-Anomaly-Maps">NDVI Anomaly Pipeline</a></li>
 <li><a href="https://github.com/AlexRuedaPayen/thess-geo-analytics/wiki/Pipeline-Pixel-Features">Pixel Feature Pipeline</a></li>
 <li><a href="https://github.com/AlexRuedaPayen/thess-geo-analytics/wiki/Pixel-Feature-Extractor">Pixel Feature Extractor</a></li>
+<li><a href="https://github.com/AlexRuedaPayen/thess-geo-analytics/wiki/Test-Whole-Pipeline-CI">Pixel Feature Extractor</a></li>
 </ul>
 
 <hr>
