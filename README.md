@@ -146,7 +146,7 @@ docker run -it --rm `
   -e DATA_LAKE=/data_lake `
   -e PIPELINE_CONFIG=config/pipeline.thess.yaml `
   -e THESS_GEO_ROOT=/app `
-  thess-geo-analytics:0.3.1
+  thess-geo-analytics:2.0.0
 </pre>
 
 <p>
@@ -524,6 +524,7 @@ The goal is to build a <b>clean, deployable geospatial data pipeline</b>
 capable of producing analysis-ready Earth Observation datasets
 for temporal analysis and machine learning.
 </p>
+
 
 
 <h2> Licence </h2>
