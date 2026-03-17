@@ -524,3 +524,11 @@ The goal is to build a <b>clean, deployable geospatial data pipeline</b>
 capable of producing analysis-ready Earth Observation datasets
 for temporal analysis and machine learning.
 </p>
+
+
+<h2> Licence </h2>
+
+<p>
+This project is licensed under the MIT License.
+You are free to use it commercially, but must include attribution.
+</p>
