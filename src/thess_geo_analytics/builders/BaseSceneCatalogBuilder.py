@@ -6,8 +6,6 @@ from typing import Any, Dict, List, Tuple
 import pandas as pd
 
 from thess_geo_analytics.core.params import StacQueryParams
-from thess_geo_analytics.services.CdseSceneCatalogService import CdseSceneCatalogService
-
 
 class BaseSceneCatalogBuilder:
     """
@@ -22,8 +20,6 @@ class BaseSceneCatalogBuilder:
       - time series dataframe schema
     """
 
-    def __init__(self, service: CdseSceneCatalogService | None = None) -> None:
-        self.service = service or CdseSceneCatalogService()
 
     def build_scene_items(
         self,

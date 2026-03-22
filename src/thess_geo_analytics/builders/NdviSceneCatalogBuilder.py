@@ -5,12 +5,18 @@ from typing import Any, Dict, List
 import pandas as pd
 
 from thess_geo_analytics.builders.BaseSceneCatalogBuilder import BaseSceneCatalogBuilder
+from thess_geo_analytics.services.CdseSceneCatalogServiceNdvi import CdseSceneCatalogServiceNdvi
 
 
 class NdviSceneCatalogBuilder(BaseSceneCatalogBuilder):
     """
     Sentinel-2 / NDVI-oriented scene catalog builder.
     """
+
+    
+    def __init__(self, service: CdseSceneCatalogServiceNdvi | None = None) -> None:
+        self.service = service or CdseSceneCatalogServiceNdvi()
+
 
     def build_scene_catalog_df(
         self,

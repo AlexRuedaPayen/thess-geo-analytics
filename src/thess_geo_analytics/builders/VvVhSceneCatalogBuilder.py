@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 import pandas as pd
 
 from thess_geo_analytics.builders.BaseSceneCatalogBuilder import BaseSceneCatalogBuilder
+from thess_geo_analytics.services.CdseSceneCatalogServiceVvVh import CdseSceneCatalogServiceVvVh
 
 
 class VvVhSceneCatalogBuilder(BaseSceneCatalogBuilder):
@@ -14,6 +15,9 @@ class VvVhSceneCatalogBuilder(BaseSceneCatalogBuilder):
     Current status:
       placeholder schema until VV/VH processing is fully implemented.
     """
+
+    def __init__(self, service: CdseSceneCatalogServiceVvVh | None = None) -> None:
+        self.service = service or CdseSceneCatalogServiceVvVh()
 
     def build_scene_catalog_df(
         self,
