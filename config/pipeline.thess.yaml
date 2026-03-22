@@ -6,7 +6,7 @@ aoi_id: "el522"
 
 pipeline:
   date_start: "2023-01-01"
-  index: "ndvi,vv_vh"
+  index: "ndvi"
   # date_end: "2021-12-31"
 
 raster:

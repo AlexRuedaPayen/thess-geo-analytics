@@ -3,11 +3,16 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from thess_geo_analytics.pipelines.BuildSceneCatalogPipeline import (
-    BuildSceneCatalogPipeline,
+from thess_geo_analytics.core.pipeline_config import load_pipeline_config
+from thess_geo_analytics.pipelines.BaseBuildSceneCatalogPipeline import (
     BuildSceneCatalogParams,
 )
-from thess_geo_analytics.core.pipeline_config import load_pipeline_config
+from thess_geo_analytics.pipelines.BuildSceneCatalogNdviPipeline import (
+    BuildSceneCatalogNdviPipeline,
+)
+from thess_geo_analytics.pipelines.BuildSceneCatalogVvVhPipeline import (
+    BuildSceneCatalogVvVhPipeline,
+)
 from thess_geo_analytics.utils.log_parameters import log_parameters
 
 
@@ -52,15 +57,27 @@ def _parse_indices(value: str) -> list[str]:
     return list(dict.fromkeys(items))
 
 
+def _make_pipeline(index_name: str, aoi_path: Path, service=None):
+    if index_name == "ndvi":
+        return BuildSceneCatalogNdviPipeline(
+            aoi_path=aoi_path,
+            service=service,
+        )
+    if index_name == "vv_vh":
+        return BuildSceneCatalogVvVhPipeline(
+            aoi_path=aoi_path,
+            service=service,
+        )
+    raise ValueError(f"Unsupported index: {index_name}")
+
+
 def main(service=None) -> None:
     cfg = load_pipeline_config()
 
     sc_cfg = cfg.scene_catalog_params
     aoi_default_path = cfg.aoi_path
 
-    p = argparse.ArgumentParser(
-        description="Build scene catalog"
-    )
+    p = argparse.ArgumentParser(description="Build scene catalog")
 
     p.add_argument("--aoi", default=str(aoi_default_path))
 
@@ -82,6 +99,7 @@ def main(service=None) -> None:
         default=cfg.index,
         help='Indices to run: "ndvi", "vv_vh", or "ndvi,vv_vh".',
     )
+
     args = p.parse_args()
 
     use_tile_selector = _as_bool01(args.use_tile_selector)
@@ -117,21 +135,21 @@ def main(service=None) -> None:
 
     for index_name in indices:
         print("------------------------------------------------------------")
-        if index_name == "ndvi":
-            print("[INFO] index : NDVI")
-            pipeline = BuildSceneCatalogPipeline(
-                aoi_path=aoi_path,
-                service=service,
-            )
-            results["ndvi"] = pipeline.run(params)
+        print(f"[INFO] index : {index_name}")
 
-        elif index_name == "vv_vh":
-            print("[INFO] index : vv_vh")
-            print("[INFO] vv_vh is in construction")
-            results["vv_vh"] = "in construction"
+        pipeline = _make_pipeline(
+            index_name=index_name,
+            aoi_path=aoi_path,
+            service=service,
+        )
+        results[index_name] = pipeline.run(params)
 
-    print(f"[OK] Pipeline returned: {results}")
-    
+    if len(results) == 1:
+        only_value = next(iter(results.values()))
+        print(f"[OK] Pipeline returned: {only_value}")
+    else:
+        print(f"[OK] Pipeline returned: {results}")
+
 
 if __name__ == "__main__":
     main()
