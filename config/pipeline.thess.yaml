@@ -6,6 +6,7 @@ aoi_id: "el522"
 
 pipeline:
   date_start: "2023-01-01"
+  index: "ndvi,vv_vh"
   # date_end: "2021-12-31"
 
 raster:
@@ -27,16 +28,11 @@ ndvi_composites:
   min_scenes_per_month: 2
   fallback_to_quarterly: true
   upload_to_gcs: false
+  strategy: "monthly"
+  max_scenes_per_period: null
+  cloud_masking: true
 
 timestamps_aggregation:
   merge_method: "first"
   resampling: "nearest"
   nodata: 0.0
-
-ndvi_composites:
-  min_scenes_per_month: 2
-  fallback_to_quarterly: true
-  upload_to_gcs: false
-  strategy: "monthly"
-  max_scenes_per_period: null
-  cloud_masking: true

@@ -85,6 +85,17 @@ class PipelineConfig:
     def date_end(self) -> Optional[str]:
         return self.raw.get("pipeline", {}).get("date_end")
 
+    @property
+    def index(self) -> str:
+        """
+        Execution index selector from pipeline.index.
+        Examples:
+          - "ndvi"
+          - "vv_vh"
+          - "ndvi,vv_vh"
+        """
+        return str(self.raw.get("pipeline", {}).get("index", "ndvi"))
+
     # ---- raster ----
     @property
     def raster_resolution(self) -> float:

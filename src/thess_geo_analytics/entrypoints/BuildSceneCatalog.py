@@ -49,7 +49,6 @@ def _parse_indices(value: str) -> list[str]:
             f'Allowed values are: "ndvi", "vv_vh", or "ndvi,vv_vh".'
         )
 
-    # deduplicate while preserving order
     return list(dict.fromkeys(items))
 
 
@@ -57,9 +56,7 @@ def main(service=None) -> None:
     cfg = load_pipeline_config()
 
     sc_cfg = cfg.scene_catalog_params
-    pipeline_date_start = cfg.raw["pipeline"]["date_start"]
     aoi_default_path = cfg.aoi_path
-    index_default = cfg.raw["pipeline"].get("index", "ndvi")
 
     p = argparse.ArgumentParser(
         description="Build scene catalog"
@@ -67,7 +64,7 @@ def main(service=None) -> None:
 
     p.add_argument("--aoi", default=str(aoi_default_path))
 
-    p.add_argument("--date-start", default=pipeline_date_start)
+    p.add_argument("--date-start", default=cfg.date_start)
     p.add_argument("--cloud-max", type=float, default=sc_cfg.get("cloud_cover_max", 20.0))
     p.add_argument("--max-items", type=int, default=sc_cfg.get("max_items", 5000))
     p.add_argument("--collection", default=sc_cfg.get("collection", "sentinel-2-l2a"))
@@ -82,10 +79,9 @@ def main(service=None) -> None:
     p.add_argument(
         "--index",
         type=str,
-        default=index_default,
+        default=cfg.index,
         help='Indices to run: "ndvi", "vv_vh", or "ndvi,vv_vh".',
     )
-
     args = p.parse_args()
 
     use_tile_selector = _as_bool01(args.use_tile_selector)
