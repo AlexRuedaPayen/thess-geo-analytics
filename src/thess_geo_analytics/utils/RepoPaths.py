@@ -11,8 +11,8 @@ class RepoPaths:
     Backward-compatible:
       - Keeps legacy constants (ROOT, AOI, OUTPUTS, TABLES, etc.) anchored on repo ROOT
         so older code doesn't break.
-      - Adds runtime-resolved "run_root()" and makes helpers (aoi/table/outputs/tmp/figure)
-        respect THESS_RUN_ROOT dynamically (so tests can redirect outputs).
+      - Adds runtime-resolved "run_root()" and makes helpers respect THESS_RUN_ROOT dynamically.
+      - Adds new step-aware helpers for the new pipeline architecture.
     """
 
     # -----------------------------
@@ -38,7 +38,7 @@ class RepoPaths:
     TMP = OUTPUTS / "tmp"
 
     # ---------------------------------------------------
-    # NEW: runtime-resolved run root for outputs
+    # Runtime-resolved run root for outputs
     # ---------------------------------------------------
     @staticmethod
     def run_root() -> Path:
@@ -49,32 +49,66 @@ class RepoPaths:
         return Path(os.environ.get("THESS_RUN_ROOT", str(RepoPaths.ROOT))).resolve()
 
     # ---------------------------------------------------
+    # Generic mkdir helper
+    # ---------------------------------------------------
+    @staticmethod
+    def _ensure_dir(p: Path) -> Path:
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    # ---------------------------------------------------
     # Preferred helpers (dynamic, respects THESS_RUN_ROOT)
     # ---------------------------------------------------
     @staticmethod
     def aoi(filename: str) -> Path:
-        return RepoPaths.run_root() / "aoi" / filename
+        base = RepoPaths._ensure_dir(RepoPaths.run_root() / "aoi")
+        return base / filename
 
     @staticmethod
     def outputs(subpath: str = "") -> Path:
-        base = RepoPaths.run_root() / "outputs"
-        return base / subpath if subpath else base
+        base = RepoPaths._ensure_dir(RepoPaths.run_root() / "outputs")
+        if not subpath:
+            return base
+        return base / subpath
 
     @staticmethod
     def table(filename: str) -> Path:
-        return RepoPaths.outputs("tables") / filename
+        base = RepoPaths._ensure_dir(RepoPaths.outputs("tables"))
+        return base / filename
 
     @staticmethod
     def figure(filename: str) -> Path:
-        return RepoPaths.outputs("figures") / filename
+        base = RepoPaths._ensure_dir(RepoPaths.outputs("figures"))
+        return base / filename
 
     @staticmethod
     def tmp(filename: str) -> Path:
-        return RepoPaths.outputs("tmp") / filename
+        base = RepoPaths._ensure_dir(RepoPaths.outputs("tmp"))
+        return base / filename
 
     @staticmethod
     def raw(filename: str) -> Path:
         return RepoPaths.DATA_RAW / filename
+
+    # ---------------------------------------------------
+    # NEW: step-based architecture helpers
+    # ---------------------------------------------------
+    @staticmethod
+    def steps_dir() -> Path:
+        return RepoPaths._ensure_dir(RepoPaths.run_root() / "steps")
+
+    @staticmethod
+    def step_dir(step_name: str, modality: str | None = None) -> Path:
+        p = RepoPaths.steps_dir() / step_name
+        if modality:
+            p = p / modality
+        return RepoPaths._ensure_dir(p)
+
+    @staticmethod
+    def step_file(step_name: str, relpath: str, modality: str | None = None) -> Path:
+        p = RepoPaths.step_dir(step_name, modality) / relpath
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
 
 
 if __name__ == "__main__":
@@ -84,3 +118,5 @@ if __name__ == "__main__":
     print("AOI (legacy const):", RepoPaths.AOI)
     print("AOI (dynamic):", RepoPaths.aoi("demo.geojson"))
     print("TABLES (dynamic):", RepoPaths.table("demo.csv"))
+    print("STEP DIR:", RepoPaths.step_dir("02_scene_catalog", "ndvi"))
+    print("STEP FILE:", RepoPaths.step_file("02_scene_catalog", "time_series.csv", "ndvi"))
