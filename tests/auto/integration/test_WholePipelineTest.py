@@ -10,9 +10,11 @@ import rasterio
 
 from thess_geo_analytics.core.pipeline_config import load_pipeline_config
 from thess_geo_analytics.pipelines.ExtractAoiPipeline import ExtractAoiPipeline
-from thess_geo_analytics.pipelines.BuildSceneCatalogPipeline import (
-    BuildSceneCatalogPipeline,
+from thess_geo_analytics.pipelines.BaseBuildSceneCatalogPipeline import (
     BuildSceneCatalogParams,
+)
+from thess_geo_analytics.pipelines.BuildSceneCatalogNdviPipeline import (
+    BuildSceneCatalogNdviPipeline,
 )
 from thess_geo_analytics.pipelines.BuildAssetsManifestPipeline import (
     BuildAssetsManifestPipeline,
@@ -38,12 +40,10 @@ from thess_geo_analytics.pipelines.BuildNdviClimatologyPipeline import (
     BuildNdviClimatologyPipeline,
     BuildNdviClimatologyParams,
 )
-
 from thess_geo_analytics.pipelines.BuildNdviAnomalyMapsPipeline import (
     BuildNdviAnomalyMapsParams,
     BuildNdviAnomalyMapsPipeline,
 )
-
 from thess_geo_analytics.pipelines.BuildPixelFeaturesPipeline import (
     BuildPixelFeaturesPipeline,
     BuildPixelFeaturesParams,
@@ -103,7 +103,6 @@ class WholePipelineTest(unittest.TestCase):
     # -------------------------------------------------
 
     def _step_01_extract_aoi(self) -> Path:
-
         pipe = ExtractAoiPipeline(nuts_service=MockNutsService())
         pipe.run(self.cfg.region_name)
         aoi_path = self.cfg.aoi_path
@@ -116,7 +115,6 @@ class WholePipelineTest(unittest.TestCase):
     # -------------------------------------------------
 
     def _step_02_scene_catalog(self, aoi_path: Path):
-
         svc = MockCdseSceneCatalogService(
             seed=1337,
             tiles_min=2,
@@ -125,7 +123,10 @@ class WholePipelineTest(unittest.TestCase):
             full_cover_pad_deg=0.02,
         )
 
-        pipe = BuildSceneCatalogPipeline(aoi_path=aoi_path, service=svc)
+        pipe = BuildSceneCatalogNdviPipeline(
+            aoi_path=aoi_path,
+            service=svc,
+        )
         params = BuildSceneCatalogParams(
             date_start="2021-01-01",
             cloud_cover_max=80,
@@ -139,6 +140,7 @@ class WholePipelineTest(unittest.TestCase):
         )
         out = pipe.run(params)
         self._assert_exists(out, "Scene catalog output missing")
+
         tables = RepoPaths.outputs("tables")
         self._assert_nonempty_csv(tables / "scenes_catalog.csv", "scenes_catalog.csv")
         self._assert_nonempty_csv(tables / "scenes_selected.csv", "scenes_selected.csv")
@@ -149,7 +151,6 @@ class WholePipelineTest(unittest.TestCase):
     # -------------------------------------------------
 
     def _step_03_assets_manifest(self):
-
         pipe = BuildAssetsManifestPipeline(
             stac_service=MockCdseStacService(band_resolution=10),
             downloader=MockCdseAssetDownloader(),
@@ -163,6 +164,7 @@ class WholePipelineTest(unittest.TestCase):
             )
         )
         self._assert_exists(out, "Assets manifest not written")
+
         tables = RepoPaths.outputs("tables")
         manifest = self._assert_nonempty_csv(
             tables / "assets_manifest_selected.csv",
@@ -173,6 +175,7 @@ class WholePipelineTest(unittest.TestCase):
             "download status",
         )
         self.assertGreater((status["status"] == "success").sum(), 0)
+
         scene_id = str(manifest.iloc[0]["scene_id"])
         raw_dir = RepoPaths.run_root() / "raw" / "s2" / scene_id
         for band in ["B04", "B08", "SCL"]:
@@ -183,7 +186,6 @@ class WholePipelineTest(unittest.TestCase):
     # -------------------------------------------------
 
     def _step_04_aggregate(self) -> Path:
-
         params = TimestampsAggregationParams(
             max_workers=2,
             debug=True,
@@ -206,7 +208,6 @@ class WholePipelineTest(unittest.TestCase):
     # -------------------------------------------------
 
     def _step_05_downsample(self, aggregated_root: Path) -> Path:
-
         dst_root = RepoPaths.run_root() / "data_raw" / "aggregated_100m"
         pipe = BuildDownsampledAggregatedTimestampsPipeline()
         outputs = pipe.run(
@@ -225,7 +226,6 @@ class WholePipelineTest(unittest.TestCase):
     # -------------------------------------------------
 
     def _step_06_ndvi(self, aggregated_root: Path):
-
         aoi = self.cfg.aoi_path
 
         params = BuildNdviAggregatedCompositeParams(
@@ -242,6 +242,7 @@ class WholePipelineTest(unittest.TestCase):
         pipe = BuildNdviAggregatedCompositePipeline()
         results = pipe.run(params, max_workers=1, debug=True)
         self.assertGreater(len(results), 0)
+
         cogs = RepoPaths.outputs("cogs")
         self._assert_exists(cogs, "NDVI COG directory missing")
         ndvi = list(cogs.glob(f"ndvi_*_{self.cfg.aoi_id}.tif"))
@@ -253,7 +254,6 @@ class WholePipelineTest(unittest.TestCase):
     # -------------------------------------------------
 
     def _step_07_statistics(self):
-
         params = BuildNdviMonthlyStatisticsParams(
             aoi_id=self.cfg.aoi_id
         )
@@ -262,8 +262,8 @@ class WholePipelineTest(unittest.TestCase):
 
         self._assert_exists(parquet, "timeseries parquet")
         self._assert_exists(fig, "timeseries plot")
-        stats_csv = RepoPaths.table("ndvi_period_stats.csv")
 
+        stats_csv = RepoPaths.table("ndvi_period_stats.csv")
         self._assert_exists(stats_csv, "period stats CSV")
         df = self._assert_nonempty_csv(stats_csv, "period stats")
         self.assertIn("mean_ndvi", df.columns)
@@ -273,7 +273,6 @@ class WholePipelineTest(unittest.TestCase):
     # -------------------------------------------------
 
     def _step_08_climatology(self):
-
         params = BuildNdviClimatologyParams(
             aoi_id=self.cfg.aoi_id
         )
@@ -282,6 +281,7 @@ class WholePipelineTest(unittest.TestCase):
         out_csv, out_fig = pipe.run(params)
         self._assert_exists(out_csv, "climatology CSV")
         self._assert_exists(out_fig, "climatology figure")
+
         df = self._assert_nonempty_csv(out_csv, "climatology")
         self.assertIn("mean_ndvi_clim", df.columns)
 
@@ -290,7 +290,6 @@ class WholePipelineTest(unittest.TestCase):
     # -------------------------------------------------
 
     def _step_09_anomaly_maps(self):
-
         params = BuildNdviAnomalyMapsParams(
             aoi_id=self.cfg.aoi_id,
             verbose=True,
@@ -301,23 +300,22 @@ class WholePipelineTest(unittest.TestCase):
 
         self.assertGreater(len(results), 0)
 
-        # at least one output should exist
         label, tif_path, png_path = results[0]
         self._assert_exists(tif_path, "anomaly GeoTIFF")
         self._assert_exists(png_path, "anomaly preview PNG")
 
-        # sanity: should live in outputs/cogs under the test run root
         cogs = RepoPaths.outputs("cogs")
-
         self._assert_exists(cogs, "cogs dir missing after anomaly step")
-        self.assertGreater(len(list(cogs.glob(f"ndvi_anomaly_*_{self.cfg.aoi_id}.tif"))), 0)
-
+        self.assertGreater(
+            len(list(cogs.glob(f"ndvi_anomaly_*_{self.cfg.aoi_id}.tif"))),
+            0,
+        )
 
     # -------------------------------------------------
     # Step 10 — Pixel Features
     # -------------------------------------------------
-    def _step_10_pixel_features(self):
 
+    def _step_10_pixel_features(self):
         aoi_id = self.cfg.aoi_id
 
         params = BuildPixelFeaturesParams(
@@ -325,7 +323,6 @@ class WholePipelineTest(unittest.TestCase):
             pattern="ndvi_anomaly_*.tif",
             aoi_id=aoi_id,
             out_path=RepoPaths.outputs("cogs") / f"pixel_features_7d_{aoi_id}.tif",
-            # keep default tiling unless you want smaller tiles for tests
             tile_height=256,
             tile_width=256,
         )
@@ -336,17 +333,14 @@ class WholePipelineTest(unittest.TestCase):
         self._assert_exists(out, "pixel features GeoTIFF")
         self._assert_raster_ok(out, "pixel features raster")
 
-        # Optional: ensure it's 7 bands
         with rasterio.open(out) as ds:
             self.assertEqual(ds.count, 7, "pixel features should have 7 bands")
-
 
     # -------------------------------------------------
     # Orchestrator
     # -------------------------------------------------
 
     def test_pipeline_smoke(self):
-
         aoi = self._step_01_extract_aoi()
         self._step_02_scene_catalog(aoi)
         self._step_03_assets_manifest()
