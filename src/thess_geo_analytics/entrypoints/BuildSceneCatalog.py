@@ -22,6 +22,7 @@ PARAMETER_DOCS = {
     "n_anchors": "Number of temporal anchors in the selection period.",
     "window_days": "Half-window size (days) around each anchor.",
     "max_union_tiles": "Maximum number of tiles allowed in a union.",
+    "index": 'Indices to run: "ndvi", "vv_vh", or "ndvi,vv_vh".',
 }
 
 
@@ -34,15 +35,34 @@ def _as_bool01(x: str) -> bool:
     raise ValueError(f"Expected boolean 0/1 or true/false, got: {x}")
 
 
+def _parse_indices(value: str) -> list[str]:
+    allowed = {"ndvi", "vv_vh"}
+
+    items = [x.strip().lower() for x in value.split(",") if x.strip()]
+    if not items:
+        raise ValueError("index cannot be empty")
+
+    invalid = [x for x in items if x not in allowed]
+    if invalid:
+        raise ValueError(
+            f"Unsupported index value(s): {invalid}. "
+            f'Allowed values are: "ndvi", "vv_vh", or "ndvi,vv_vh".'
+        )
+
+    # deduplicate while preserving order
+    return list(dict.fromkeys(items))
+
+
 def main(service=None) -> None:
     cfg = load_pipeline_config()
 
     sc_cfg = cfg.scene_catalog_params
     pipeline_date_start = cfg.raw["pipeline"]["date_start"]
     aoi_default_path = cfg.aoi_path
+    index_default = cfg.raw["pipeline"].get("index", "ndvi")
 
     p = argparse.ArgumentParser(
-        description="Build Sentinel-2 scene catalog"
+        description="Build scene catalog"
     )
 
     p.add_argument("--aoi", default=str(aoi_default_path))
@@ -59,10 +79,18 @@ def main(service=None) -> None:
     p.add_argument("--window-days", type=int, default=sc_cfg.get("window_days", 21))
     p.add_argument("--max-union-tiles", type=int, default=sc_cfg.get("max_union_tiles", 20))
 
+    p.add_argument(
+        "--index",
+        type=str,
+        default=index_default,
+        help='Indices to run: "ndvi", "vv_vh", or "ndvi,vv_vh".',
+    )
+
     args = p.parse_args()
 
     use_tile_selector = _as_bool01(args.use_tile_selector)
     allow_union = _as_bool01(args.allow_union)
+    indices = _parse_indices(args.index)
 
     aoi_path = Path(args.aoi)
 
@@ -84,19 +112,30 @@ def main(service=None) -> None:
         "region": cfg.region_name,
         "aoi_id": cfg.aoi_id,
         "aoi_path": str(aoi_path),
+        "index": indices,
     }
 
     log_parameters("BuildSceneCatalog", params, PARAMETER_DOCS, extra)
 
-    pipeline = BuildSceneCatalogPipeline(
-        aoi_path=aoi_path,
-        service=service,
-    )
+    results = {}
 
-    out = pipeline.run(params)
+    for index_name in indices:
+        print("------------------------------------------------------------")
+        if index_name == "ndvi":
+            print("[INFO] index : NDVI")
+            pipeline = BuildSceneCatalogPipeline(
+                aoi_path=aoi_path,
+                service=service,
+            )
+            results["ndvi"] = pipeline.run(params)
 
-    print(f"[OK] Pipeline returned: {out}")
+        elif index_name == "vv_vh":
+            print("[INFO] index : vv_vh")
+            print("[INFO] vv_vh is in construction")
+            results["vv_vh"] = "in construction"
 
+    print(f"[OK] Pipeline returned: {results}")
+    
 
 if __name__ == "__main__":
     main()
