@@ -6,6 +6,10 @@ from thess_geo_analytics.pipelines.BaseBuildSceneCatalogPipeline import (
     BaseBuildSceneCatalogPipeline,
     BuildSceneCatalogParams,
 )
+from thess_geo_analytics.core.step_paths import (
+    MODALITY_VV_VH,
+    scene_catalog_step_paths,
+)
 
 
 class BuildSceneCatalogVvVhPipeline(BaseBuildSceneCatalogPipeline):
@@ -15,9 +19,15 @@ class BuildSceneCatalogVvVhPipeline(BaseBuildSceneCatalogPipeline):
             builder=VvVhSceneCatalogBuilder(service=service),
         )
 
-    def run(self, params: BuildSceneCatalogParams) -> str:
-        print("[INFO] vv_vh is in construction")
-        return "in construction"
+    def scene_catalog_paths(self):
+        return scene_catalog_step_paths(MODALITY_VV_VH)
+
+    def should_write_legacy_scene_catalog_outputs(self) -> bool:
+        return False
+
+    #def run(self, params: BuildSceneCatalogParams) -> str:
+    #    print("[INFO] vv_vh is in construction")
+    #    return "in construction"
 
     def build_stac_params(self, params: BuildSceneCatalogParams) -> StacQueryParams:
         return StacQueryParams(

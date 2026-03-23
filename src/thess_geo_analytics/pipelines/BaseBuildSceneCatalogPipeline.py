@@ -67,6 +67,19 @@ class BaseBuildSceneCatalogPipeline:
     def empty_coverage_columns(self) -> list[str]:
         raise NotImplementedError
 
+    def scene_catalog_paths(self):
+        raise NotImplementedError
+
+    def should_write_legacy_scene_catalog_outputs(self) -> bool:
+        return False
+
+    def selector(self, params: BuildSceneCatalogParams) -> TileSelector:
+        return TileSelector(
+            full_cover_threshold=params.full_cover_threshold,
+            allow_union=params.allow_union,
+            max_union_tiles=params.max_union_tiles,
+        )
+
     def coverage_row_from_group(self, dt, cis, aoi_area_value: float, params: BuildSceneCatalogParams) -> dict[str, Any]:
         union_geom = cis[0].covered_geom
         for ci in cis[1:]:
@@ -90,6 +103,19 @@ class BaseBuildSceneCatalogPipeline:
                 f"median={ts_df['coverage_frac'].median():.3f} max={ts_df['coverage_frac'].max():.3f}"
             )
 
+    def legacy_scene_catalog_paths(self) -> dict[str, Path]:
+        return {
+            "scenes_catalog": self._ensure_parent(RepoPaths.table("scenes_catalog.csv")),
+            "scenes_selected": self._ensure_parent(RepoPaths.table("scenes_selected.csv")),
+            "time_series": self._ensure_parent(RepoPaths.table("time_serie.csv")),
+            "timestamps_coverage": self._ensure_parent(RepoPaths.table("timestamps_coverage.csv")),
+        }
+
+    def _write_df(self, df: pd.DataFrame, new_path: Path, legacy_path: Path | None = None) -> None:
+        df.to_csv(new_path, index=False)
+        if legacy_path is not None and self.should_write_legacy_scene_catalog_outputs():
+            df.to_csv(legacy_path, index=False)
+
     def run(self, params: BuildSceneCatalogParams) -> Path:
         start = self._parse_start_date(params.date_start)
         end = date.today()
@@ -103,40 +129,58 @@ class BaseBuildSceneCatalogPipeline:
             params=stac_params,
         )
 
-        raw_csv = self._ensure_parent(RepoPaths.table("scenes_catalog.csv"))
-        selected_csv = self._ensure_parent(RepoPaths.table("scenes_selected.csv"))
-        ts_csv = self._ensure_parent(RepoPaths.table("time_serie.csv"))
-        ts_cov_csv = self._ensure_parent(RepoPaths.table("timestamps_coverage.csv"))
+        paths = self.scene_catalog_paths()
+        legacy = self.legacy_scene_catalog_paths() if self.should_write_legacy_scene_catalog_outputs() else None
+
+        raw_csv = self._ensure_parent(paths.scenes_catalog)
+        selected_csv = self._ensure_parent(paths.scenes_selected)
+        ts_csv = self._ensure_parent(paths.time_series)
+        ts_cov_csv = self._ensure_parent(paths.timestamps_coverage)
 
         raw_df = (
             self.builder.build_scene_catalog_df(items, collection=params.collection)
             if items
             else pd.DataFrame(columns=self.empty_raw_columns())
         )
-        raw_df.to_csv(raw_csv, index=False)
+        self._write_df(
+            raw_df,
+            raw_csv,
+            legacy["scenes_catalog"] if legacy else None,
+        )
 
         print(f"[OUTPUT] scenes_catalog exported => {raw_csv}")
         print(f"[INFO] Raw scenes found: {len(raw_df)}")
 
         if not items or raw_df.empty or not params.use_tile_selector:
             if params.use_tile_selector:
-                pd.DataFrame(columns=self.empty_selected_columns()).to_csv(selected_csv, index=False)
-                pd.DataFrame(columns=self.empty_time_series_columns()).to_csv(ts_csv, index=False)
-                pd.DataFrame(columns=self.empty_coverage_columns()).to_csv(ts_cov_csv, index=False)
+                selected_empty = pd.DataFrame(columns=self.empty_selected_columns())
+                ts_empty = pd.DataFrame(columns=self.empty_time_series_columns())
+                cov_empty = pd.DataFrame(columns=self.empty_coverage_columns())
+
+                self._write_df(
+                    selected_empty,
+                    selected_csv,
+                    legacy["scenes_selected"] if legacy else None,
+                )
+                self._write_df(
+                    ts_empty,
+                    ts_csv,
+                    legacy["time_series"] if legacy else None,
+                )
+                self._write_df(
+                    cov_empty,
+                    ts_cov_csv,
+                    legacy["timestamps_coverage"] if legacy else None,
+                )
 
                 print(f"[OUTPUT] scenes_selected exported => {selected_csv} (empty)")
-                print(f"[OUTPUT] time_serie exported     => {ts_csv} (empty)")
+                print(f"[OUTPUT] time_series exported    => {ts_csv} (empty)")
                 print(f"[OUTPUT] timestamps_coverage exported => {ts_cov_csv} (empty)")
 
             return raw_csv
 
         aoi_shp = shape(aoi_geom_geojson)
-
-        selector = TileSelector(
-            full_cover_threshold=params.full_cover_threshold,
-            allow_union=params.allow_union,
-            max_union_tiles=params.max_union_tiles,
-        )
+        selector = self.selector(params)
 
         infos, _, _, aoi_area_value = selector._coverage_infos(items, aoi_shp.buffer(0.05))
 
@@ -157,7 +201,11 @@ class BaseBuildSceneCatalogPipeline:
             else pd.DataFrame(columns=self.empty_coverage_columns())
         )
 
-        cov_df.to_csv(ts_cov_csv, index=False)
+        self._write_df(
+            cov_df,
+            ts_cov_csv,
+            legacy["timestamps_coverage"] if legacy else None,
+        )
         print(f"[OUTPUT] timestamps_coverage exported => {ts_cov_csv}")
 
         n_full = int(cov_df["has_full_cover"].sum()) if not cov_df.empty else 0
@@ -190,11 +238,22 @@ class BaseBuildSceneCatalogPipeline:
         if not items_for_selector:
             print("[WARN] No items belong to timestamps with full coverage; outputs will be empty.")
 
-            pd.DataFrame(columns=self.empty_selected_columns()).to_csv(selected_csv, index=False)
-            pd.DataFrame(columns=self.empty_time_series_columns()).to_csv(ts_csv, index=False)
+            selected_empty = pd.DataFrame(columns=self.empty_selected_columns())
+            ts_empty = pd.DataFrame(columns=self.empty_time_series_columns())
+
+            self._write_df(
+                selected_empty,
+                selected_csv,
+                legacy["scenes_selected"] if legacy else None,
+            )
+            self._write_df(
+                ts_empty,
+                ts_csv,
+                legacy["time_series"] if legacy else None,
+            )
 
             print(f"[OUTPUT] scenes_selected exported => {selected_csv} (empty)")
-            print(f"[OUTPUT] time_serie exported     => {ts_csv} (empty)")
+            print(f"[OUTPUT] time_series exported    => {ts_csv} (empty)")
             return ts_csv
 
         try:
@@ -218,16 +277,25 @@ class BaseBuildSceneCatalogPipeline:
             selected_scenes,
             collection=params.collection,
         )
-        selected_df.to_csv(selected_csv, index=False)
+        self._write_df(
+            selected_df,
+            selected_csv,
+            legacy["scenes_selected"] if legacy else None,
+        )
 
         ts_df = self.builder.selected_scenes_to_time_serie_df(selected_scenes)
 
         if ts_df.empty:
             ts_df = pd.DataFrame(columns=self.empty_time_series_columns())
 
-        ts_df.to_csv(ts_csv, index=False)
+        self._write_df(
+            ts_df,
+            ts_csv,
+            legacy["time_series"] if legacy else None,
+        )
+
         print(f"[OUTPUT] scenes_selected exported => {selected_csv}")
-        print(f"[OUTPUT] time_serie exported     => {ts_csv}")
+        print(f"[OUTPUT] time_series exported    => {ts_csv}")
         print(f"[INFO] Anchors requested: {params.n_anchors}, anchors with selection: {len(ts_df)}")
 
         self.print_time_series_summary(ts_df)

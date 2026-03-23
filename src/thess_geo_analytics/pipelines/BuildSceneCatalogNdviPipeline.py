@@ -8,6 +8,10 @@ from thess_geo_analytics.pipelines.BaseBuildSceneCatalogPipeline import (
     BaseBuildSceneCatalogPipeline,
     BuildSceneCatalogParams,
 )
+from thess_geo_analytics.core.step_paths import (
+    MODALITY_NDVI,
+    scene_catalog_step_paths,
+)
 
 
 class BuildSceneCatalogNdviPipeline(BaseBuildSceneCatalogPipeline):
@@ -16,6 +20,12 @@ class BuildSceneCatalogNdviPipeline(BaseBuildSceneCatalogPipeline):
             aoi_path=aoi_path,
             builder=NdviSceneCatalogBuilder(service=service),
         )
+
+    def scene_catalog_paths(self):
+        return scene_catalog_step_paths(MODALITY_NDVI)
+
+    def should_write_legacy_scene_catalog_outputs(self) -> bool:
+        return True
 
     def build_stac_params(self, params: BuildSceneCatalogParams) -> StacQueryParams:
         return StacQueryParams(
