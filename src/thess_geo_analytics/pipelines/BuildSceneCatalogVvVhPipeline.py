@@ -2,16 +2,24 @@ from __future__ import annotations
 
 from thess_geo_analytics.builders.VvVhSceneCatalogBuilder import VvVhSceneCatalogBuilder
 from thess_geo_analytics.core.params import StacQueryParams
-from thess_geo_analytics.pipelines.BaseBuildSceneCatalogPipeline import (
-    BaseBuildSceneCatalogPipeline,
-    BuildSceneCatalogParams,
-)
+
+from dataclasses import dataclass
+
 from thess_geo_analytics.core.step_paths import (
     MODALITY_VV_VH,
     scene_catalog_step_paths,
 )
 
+from thess_geo_analytics.pipelines.BaseBuildSceneCatalogPipeline import (
+    BaseBuildSceneCatalogPipeline,
+    BaseBuildSceneCatalogParams,
+)
 
+@dataclass(frozen=True)
+class BuildSceneCatalogVvVhParams(BaseBuildSceneCatalogParams):
+    required_polarizations: tuple[str, ...] = ("VV", "VH")
+    preferred_orbit_state: str | None = None
+    instrument_mode: str | None = "IW"
 class BuildSceneCatalogVvVhPipeline(BaseBuildSceneCatalogPipeline):
     def __init__(self, aoi_path, service=None) -> None:
         super().__init__(

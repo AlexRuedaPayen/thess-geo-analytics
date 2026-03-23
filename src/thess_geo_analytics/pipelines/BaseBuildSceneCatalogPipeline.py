@@ -16,9 +16,8 @@ from thess_geo_analytics.utils.RepoPaths import RepoPaths
 
 
 @dataclass(frozen=True)
-class BuildSceneCatalogParams:
+class BaseBuildSceneCatalogParams:
     date_start: str = "2021-01-01"
-    cloud_cover_max: float = 20.0
     max_items: int = 5000
     collection: str = DEFAULT_COLLECTION
     use_tile_selector: bool = True

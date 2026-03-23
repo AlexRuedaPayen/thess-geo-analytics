@@ -4,14 +4,13 @@ import argparse
 from pathlib import Path
 
 from thess_geo_analytics.core.pipeline_config import load_pipeline_config
-from thess_geo_analytics.pipelines.BaseBuildSceneCatalogPipeline import (
-    BuildSceneCatalogParams,
-)
 from thess_geo_analytics.pipelines.BuildSceneCatalogNdviPipeline import (
     BuildSceneCatalogNdviPipeline,
+    BuildSceneCatalogNdviParams,
 )
 from thess_geo_analytics.pipelines.BuildSceneCatalogVvVhPipeline import (
     BuildSceneCatalogVvVhPipeline,
+    BuildSceneCatalogVvVhParams,
 )
 from thess_geo_analytics.utils.log_parameters import log_parameters
 
@@ -71,6 +70,39 @@ def _make_pipeline(index_name: str, aoi_path: Path, service=None):
     raise ValueError(f"Unsupported index: {index_name}")
 
 
+def _make_params(
+    *,
+    index_name: str,
+    args,
+    use_tile_selector: bool,
+    allow_union: bool,
+):
+    common = dict(
+        date_start=args.date_start,
+        max_items=args.max_items,
+        collection=args.collection,
+        use_tile_selector=use_tile_selector,
+        full_cover_threshold=args.full_cover_threshold,
+        allow_union=allow_union,
+        max_union_tiles=args.max_union_tiles,
+        n_anchors=args.n_anchors,
+        window_days=args.window_days,
+    )
+
+    if index_name == "ndvi":
+        return BuildSceneCatalogNdviParams(
+            **common,
+            cloud_cover_max=args.cloud_max,
+        )
+
+    if index_name == "vv_vh":
+        return BuildSceneCatalogVvVhParams(
+            **common,
+        )
+
+    raise ValueError(f"Unsupported index: {index_name}")
+
+
 def main(service=None) -> None:
     cfg = load_pipeline_config()
 
@@ -108,19 +140,6 @@ def main(service=None) -> None:
 
     aoi_path = Path(args.aoi)
 
-    params = BuildSceneCatalogParams(
-        date_start=args.date_start,
-        cloud_cover_max=args.cloud_max,
-        max_items=args.max_items,
-        collection=args.collection,
-        use_tile_selector=use_tile_selector,
-        full_cover_threshold=args.full_cover_threshold,
-        allow_union=allow_union,
-        max_union_tiles=args.max_union_tiles,
-        n_anchors=args.n_anchors,
-        window_days=args.window_days,
-    )
-
     extra = {
         "mode": cfg.mode,
         "region": cfg.region_name,
@@ -129,7 +148,7 @@ def main(service=None) -> None:
         "index": indices,
     }
 
-    log_parameters("BuildSceneCatalog", params, PARAMETER_DOCS, extra)
+    log_parameters("BuildSceneCatalog", args, PARAMETER_DOCS, extra)
 
     results = {}
 
@@ -141,6 +160,12 @@ def main(service=None) -> None:
             index_name=index_name,
             aoi_path=aoi_path,
             service=service,
+        )
+        params = _make_params(
+            index_name=index_name,
+            args=args,
+            use_tile_selector=use_tile_selector,
+            allow_union=allow_union,
         )
         results[index_name] = pipeline.run(params)
 

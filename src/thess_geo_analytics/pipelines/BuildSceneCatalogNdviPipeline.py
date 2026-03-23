@@ -6,12 +6,16 @@ from thess_geo_analytics.builders.NdviSceneCatalogBuilder import NdviSceneCatalo
 from thess_geo_analytics.core.params import StacQueryParams
 from thess_geo_analytics.pipelines.BaseBuildSceneCatalogPipeline import (
     BaseBuildSceneCatalogPipeline,
-    BuildSceneCatalogParams,
+    BaseBuildSceneCatalogParams,
 )
+from dataclasses import dataclass
 from thess_geo_analytics.core.step_paths import (
     MODALITY_NDVI,
     scene_catalog_step_paths,
 )
+@dataclass(frozen=True)
+class BuildSceneCatalogNdviParams(BaseBuildSceneCatalogParams):
+    cloud_cover_max: float = 20.0
 
 
 class BuildSceneCatalogNdviPipeline(BaseBuildSceneCatalogPipeline):
@@ -27,7 +31,7 @@ class BuildSceneCatalogNdviPipeline(BaseBuildSceneCatalogPipeline):
     def should_write_legacy_scene_catalog_outputs(self) -> bool:
         return True
 
-    def build_stac_params(self, params: BuildSceneCatalogParams) -> StacQueryParams:
+    def build_stac_params(self, params: BuildSceneCatalogNdviParams) -> StacQueryParams:
         return StacQueryParams(
             collection=params.collection,
             cloud_cover_max=params.cloud_cover_max,
@@ -77,7 +81,7 @@ class BuildSceneCatalogNdviPipeline(BaseBuildSceneCatalogPipeline):
             "has_full_cover",
         ]
 
-    def coverage_row_from_group(self, dt, cis, aoi_area_value: float, params: BuildSceneCatalogParams) -> dict:
+    def coverage_row_from_group(self, dt, cis, aoi_area_value: float, params: BuildSceneCatalogNdviParams) -> dict:
         union_geom = cis[0].covered_geom
         for ci in cis[1:]:
             union_geom = union_geom.union(ci.covered_geom)
